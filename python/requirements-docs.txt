@@ -1,0 +1,23 @@
+# desk-agent 文档提取 + 扫描件 OCR 兜底（可选依赖层）
+#
+# read_extract.py 的标准库路径（.ipynb/.docx/.xlsx）零依赖；这里装的是：
+#   * firecrawl-anydoc —— PDF/DOC/PPT/ODT/RTF/EPUB 转 Markdown 的 Rust 内核
+#     （import anydoc；NeedsOcrError → OCR 兜底；HostedError → 云端 OCR）
+#   * pymupdf          —— PDF 逐页文本检查（覆盖率警告）+ 扫描页渲染成 PNG
+#   * pypdf            —— anydoc 的 PDF 解析后备
+#   * openpyxl / python-docx —— 复杂 XLSX/DOCX 的兜底解析器
+#
+# 「可选」只表示缺了不影响进程启动 —— 不表示可以不装。部署时由
+# scripts/bootstrap-venv.* 一起装齐（用户 2026-09-26 口径）。
+# 确实没装时，.ipynb/.docx/.xlsx 仍照常提取，其余文档格式 read_file 会返回
+# 一条「怎么装」的提示（教学式错误，不影响其它读取能力）。
+#
+# 实测可装组合（Python 3.14，cp310-abi3-win_amd64）：
+#   firecrawl-anydoc==0.2.4  pymupdf==1.28.2  pypdf==6.19.0
+#   openpyxl==3.1.5  python-docx==1.2.0
+
+firecrawl-anydoc>=0.2.4
+pymupdf>=1.28.0
+pypdf>=6.16.0
+openpyxl>=3.1.5
+python-docx>=1.2.0

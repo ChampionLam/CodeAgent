@@ -1,0 +1,17 @@
+{
+  "model": {
+    "baseUrl": "",
+    "model": "",
+    "apiKeyEnv": "",
+    "maxTokens": 4096,
+    "timeoutSeconds": 180
+  },
+  "capabilities": {
+    "workspaceRoot": "",
+    "delegation": {
+      "enabled": true,
+      "maxConcurrentChildren": 3,
+      "nodeMaxLoop": 12
+    }
+  }
+}

@@ -1,0 +1,164 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 10, 0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 100;
+  display: grid; place-items: center;
+  padding: 24px;
+}
+.card {
+  width: min(560px, 100%);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.card[data-level="L1"] { border-color: rgba(59,130,246,0.45); }
+.card[data-level="L2"] { border-color: rgba(245,158,11,0.45); }
+.card[data-level="L3"] { border-color: rgba(239,68,68,0.55); }
+
+.head {
+  display: flex; align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.iconBubble {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  display: grid; place-items: center;
+  flex-shrink: 0;
+}
+.iconBubble[data-level="L1"] { background: var(--semantic-info-soft); color: var(--semantic-info); }
+.iconBubble[data-level="L2"] { background: var(--semantic-warn-soft); color: var(--semantic-warn); }
+.iconBubble[data-level="L3"] { background: var(--semantic-danger-soft); color: var(--semantic-danger); }
+
+.titleBlock { flex: 1; }
+.title { font-size: 15px; font-weight: 600; }
+.subtitle { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
+
+.closeBtn {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.closeBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.body { padding: 16px 20px 4px; }
+.row {
+  display: flex; gap: 12px;
+  font-size: 13px;
+  margin: 8px 0;
+}
+.rowLabel {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  width: 90px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.rowValue {
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.payloadBox {
+  margin-top: 8px;
+  background: var(--bg-code);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: #ffd28a;
+  position: relative;
+  word-break: break-all;
+}
+.payloadBox::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 3px 0 0 3px;
+  background: var(--semantic-warn);
+}
+.card[data-level="L3"] .payloadBox::before { background: var(--semantic-danger); }
+.card[data-level="L1"] .payloadBox::before { background: var(--semantic-info); }
+.card[data-level="L1"] .payloadBox { color: #c9d6ff; }
+
+.reason {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.65;
+  border: 1px solid rgba(99,102,241,0.18);
+}
+
+.foot {
+  display: flex; gap: 8px; align-items: center;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  margin-top: 12px;
+}
+.spacer { flex: 1; }
+.kbdHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex; gap: 12px;
+}
+.kbdHint .kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-default);
+  color: var(--text-tertiary);
+  margin-right: 4px;
+}
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+.btnDeny {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+.btnDeny:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+
+.btnAllowOnce {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+.btnAllowOnce:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hover); }
+
+.btnAlways {
+  background: var(--accent);
+  color: white;
+}
+.btnAlways:hover { background: var(--accent-hover); }
+
+.l3Note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: 8px;
+}

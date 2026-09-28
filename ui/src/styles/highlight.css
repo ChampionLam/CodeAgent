@@ -1,0 +1,52 @@
+/* highlight.js — atom-one-dark tuned to our palette */
+.hljs {
+  display: block;
+  overflow-x: auto;
+  background: transparent;
+  color: #c9c9d1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.hljs-comment, .hljs-quote { color: #5a5a62; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-link { color: #c084fc; }
+.hljs-function .hljs-keyword { color: #c084fc; }
+.hljs-subst { color: #c9c9d1; }
+.hljs-string, .hljs-attr, .hljs-meta .hljs-string { color: #86efac; }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-template-variable, .hljs-variable { color: #fbbf24; }
+.hljs-title, .hljs-name, .hljs-attribute, .hljs-built_in, .hljs-class .hljs-title { color: #7dd3fc; }
+.hljs-type, .hljs-tag { color: #f9a8d4; }
+.hljs-regexp, .hljs-deletion { color: #fca5a5; }
+.hljs-addition { color: #86efac; background: rgba(16,185,129,0.08); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+/* ── 浅色主题的语法高亮（atom-one-light 调色） ─────────────────────────
+   深色那套是 atom-one-dark；浅底上必须换成这套，否则关键字/字符串几乎看不见。 */
+[data-theme='light'] .hljs { color: #383a42; }
+[data-theme='light'] .hljs-comment,
+[data-theme='light'] .hljs-quote { color: #a0a1a7; }
+[data-theme='light'] .hljs-keyword,
+[data-theme='light'] .hljs-selector-tag,
+[data-theme='light'] .hljs-literal,
+[data-theme='light'] .hljs-section,
+[data-theme='light'] .hljs-link { color: #a626a4; }
+[data-theme='light'] .hljs-subst { color: #383a42; }
+[data-theme='light'] .hljs-string,
+[data-theme='light'] .hljs-attr,
+[data-theme='light'] .hljs-meta .hljs-string { color: #50a14f; }
+[data-theme='light'] .hljs-number,
+[data-theme='light'] .hljs-symbol,
+[data-theme='light'] .hljs-bullet,
+[data-theme='light'] .hljs-template-variable,
+[data-theme='light'] .hljs-variable { color: #986801; }
+[data-theme='light'] .hljs-title,
+[data-theme='light'] .hljs-name,
+[data-theme='light'] .hljs-attribute,
+[data-theme='light'] .hljs-built_in,
+[data-theme='light'] .hljs-class .hljs-title { color: #4078f2; }
+[data-theme='light'] .hljs-type,
+[data-theme='light'] .hljs-tag { color: #c18401; }
+[data-theme='light'] .hljs-regexp,
+[data-theme='light'] .hljs-deletion { color: #e45649; }
+[data-theme='light'] .hljs-addition { color: #50a14f; background: rgba(16, 185, 129, 0.1); }

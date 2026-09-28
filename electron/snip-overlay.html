@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>CodeAgent · 截屏</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: transparent;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    user-select: none; cursor: crosshair;
+  }
+  /* Frozen screen bitmap: the frame captured the moment the hotkey fired.
+     The overlay itself never lands in the crop. */
+  #shot {
+    position: fixed; inset: 0;
+    background: #000 no-repeat center;
+    background-size: 100% 100%;
+  }
+  /* Slight dim before a region exists (Snipaste shows the live frame clean,
+     so this stays very light and goes away once a region is drawn). */
+  #veil { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.12); }
+  /* Four rects dim everything outside the selection; the inside stays at full
+     brightness, which is what makes the region feel "cut out in place". */
+  .shade { position: fixed; background: rgba(0, 0, 0, 0.45); display: none; }
+  #sel {
+    position: fixed; display: none;
+    border: 1px solid #4f8cff;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+    pointer-events: none;
+  }
+  #size {
+    position: fixed; display: none;
+    background: rgba(23, 29, 38, 0.86); color: #cbd5e1;
+    border: 1px solid #2c3440; border-radius: 4px;
+    font-size: 11px; line-height: 1; padding: 4px 6px;
+    pointer-events: none; white-space: nowrap;
+  }
+  #tip {
+    position: fixed; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    color: #e5e7eb; font-size: 13px;
+    background: rgba(15, 15, 16, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px; padding: 10px 16px;
+    pointer-events: none;
+  }
+  /* Annotation layer. Coordinates are window CSS px; export scales them by
+     bitmap/window so the file keeps native pixels. */
+  #ink { position: fixed; left: 0; top: 0; pointer-events: none; }
+  #txt {
+    position: fixed; display: block;
+    background: rgba(15, 15, 16, 0.94);
+    border: 1px solid #ff3b30; border-radius: 4px;
+    color: #ff3b30; outline: none; z-index: 6;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    padding: 0 4px;
+  }
+  /* Floating toolbar, anchored to the selection (below it, above it when the
+     region hugs the bottom edge). Icon-only, like Snipaste's strip. */
+  #bar {
+    position: fixed; display: none;
+    height: 34px; box-sizing: border-box;
+    align-items: center; gap: 2px;
+    padding: 0 4px;
+    background: rgba(19, 19, 23, 0.96);
+    border: 1px solid #2c3440; border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    white-space: nowrap;
+  }
+  #bar.on { display: flex; }
+  #bar button {
+    width: 28px; height: 28px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    color: #cbd5e1; cursor: pointer; font: inherit;
+  }
+  #bar button:hover { background: #23232a; }
+  #bar button:disabled { opacity: 0.35; cursor: default; }
+  #bar button.active { background: #2b3444; border-color: #4f8cff; color: #e8eefc; }
+  #bar .sep { width: 1px; height: 18px; background: #2f3742; margin: 0 3px; }
+  #bar button.primary { background: #4f46e5; color: #fff; }
+  #bar button.primary:hover { background: #5a51f0; }
+</style>
+</head>
+<body>
+<div id="shot"></div>
+<div id="veil"></div>
+<div class="shade" id="s-top"></div>
+<div class="shade" id="s-left"></div>
+<div class="shade" id="s-right"></div>
+<div class="shade" id="s-bottom"></div>
+<canvas id="ink"></canvas>
+<div id="sel"></div>
+<div id="size"></div>
+<div id="tip">拖动选择截图区域 · 松手后可标注 · Esc 取消 · 双击全屏</div>
+<div id="bar">
+  <button id="t-rect" title="矩形 (1)"></button>
+  <button id="t-ellipse" title="椭圆 (2)"></button>
+  <button id="t-arrow" title="箭头 (3)"></button>
+  <button id="t-pencil" title="铅笔 (4)"></button>
+  <button id="t-marker" title="记号笔 (5)"></button>
+  <button id="t-text" title="文字 (6)"></button>
+  <button id="t-mosaic" title="马赛克 (7)"></button>
+  <button id="t-blur" title="高斯模糊 (8)"></button>
+  <span class="sep"></span>
+  <button id="t-undo" title="撤销 (Ctrl+Z)"></button>
+  <button id="t-redo" title="恢复 (Ctrl+Y)"></button>
+  <span class="sep"></span>
+  <button id="b-retake" title="重新框选 (右键)"></button>
+  <button id="b-cancel" title="取消截屏 (Esc)"></button>
+  <button id="b-ok" class="primary" title="确认并附上 (Enter)"></button>
+</div>
+<script>
+(function () {
+  var ipc = null;
+  try { ipc = window.__snipIpc; } catch (e) { /* no preload: still usable */ }
+
+  var shot = document.getElementById('shot');
+  var veil = document.getElementById('veil');
+  var sel = document.getElementById('sel');
+  var sizeTip = document.getElementById('size');
+  var tip = document.getElementById('tip');
+  var ink = document.getElementById('ink');
+  var bar = document.getElementById('bar');
+  var shades = {
+    top: document.getElementById('s-top'),
+    left: document.getElementById('s-left'),
+    right: document.getElementById('s-right'),
+    bottom: document.getElementById('s-bottom')
+  };
+
+  // Frozen bitmap. The stage background uses it, and the export re-draws from
+  // this same Image so annotations and pixels always agree.
+  var bitmap = new Image();
+  var NATIVE_W = 0, NATIVE_H = 0, BITMAP_READY = false;
+  // Frozen frame resampled to window CSS px. Mosaic/blur sample from this so
+  // their source coordinates are the same space as the strokes.
+  var stage = document.createElement('canvas');
+  var DPR = window.devicePixelRatio || 1;
+  function buildStage() {
+    if (!BITMAP_READY) return;
+    var cw = Math.max(1, Math.round(NATIVE_W / DPR));
+    var ch = Math.max(1, Math.round(NATIVE_H / DPR));
+    stage.width = cw; stage.height = ch;
+    stage.getContext('2d').drawImage(bitmap, 0, 0, cw, ch);
+    // 1:1, anchored top-left: never stretch the frame, or the crop drifts.
+    shot.style.backgroundSize = cw + 'px ' + ch + 'px';
+    shot.style.backgroundPosition = '0 0';
+    shot.style.backgroundRepeat = 'no-repeat';
+  }
+  try {
+    var payload = window.__snipPayload;
+    if (payload && payload.imageUrl) {
+      bitmap.onload = function () {
+        NATIVE_W = bitmap.naturalWidth || 0;
+        NATIVE_H = bitmap.naturalHeight || 0;
+        BITMAP_READY = NATIVE_W > 0;
+        buildStage();
+        redraw();
+      };
+      bitmap.src = payload.imageUrl;
+      shot.style.backgroundImage = 'url("' + payload.imageUrl + '")';
+    }
+  } catch (e) { /* keep going without a bitmap */ }
+
+  var W = window.innerWidth, H = window.innerHeight;
+  var mode = 'select';          // 'select' draws a region, 'annotate edits it
+  var region = null;            // {x,y,w,h} window CSS px
+  var dragStart = null;
+  var dragging = false;
+  var strokes = [];             // committed annotations
+  var redoStack = [];
+  var live = null;              // annotation being drawn
+  var tool = 'rect';
+  var txt = null;               // pending text input {x, y, el}
+  var TEXT_PX = 14;             // text size, window CSS px
+
+  var SVG = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">';
+  var ICONS = {
+    't-rect': SVG + '<rect x="2.5" y="3.5" width="11" height="9" rx="1"/></svg>',
+    't-ellipse': SVG + '<ellipse cx="8" cy="8" rx="5.5" ry="4.5"/></svg>',
+    't-arrow': SVG + '<path d="M2.5 13.5L13 3"/><path d="M8.5 3H13v4.5"/></svg>',
+    't-pencil': SVG + '<path d="M3 13l1-3 7.5-7.5 2 2L6 12z"/></svg>',
+    't-marker': SVG + '<path d="M3.5 12.5l7-7 2 2-7 7z" fill="currentColor" fill-opacity="0.5"/><path d="M2.5 14.5h4"/></svg>',
+    't-text': SVG + '<path d="M3.5 4h9M8 4v8.5M6 12.5h4"/></svg>',
+    't-mosaic': SVG + '<rect x="2.5" y="2.5" width="4" height="4"/><rect x="9.5" y="2.5" width="4" height="4"/><rect x="2.5" y="9.5" width="4" height="4"/><rect x="9.5" y="9.5" width="4" height="4"/></svg>',
+    't-blur': SVG + '<circle cx="8" cy="8" r="5.2"/><path d="M4.6 6.4h6.8M4.6 9.6h6.8"/></svg>',
+    't-undo': SVG + '<path d="M6 5.5H9.5a3.5 3.5 0 1 1 0 7H6.5"/><path d="M8 3L5.5 5.5 8 8"/></svg>',
+    't-redo': SVG + '<path d="M10 5.5H6.5a3.5 3.5 0 1 0 0 7H9.5"/><path d="M8 3l2.5 2.5L8 8"/></svg>',
+    'b-retake': SVG + '<path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13.2 2.6V5.4h-2.8"/></svg>',
+    'b-cancel': SVG + '<path d="M4 4l8 8M12 4l-8 8"/></svg>',
+    'b-ok': SVG + '<path d="M2.5 8.5l4 4 7-9"/></svg>'
+  };
+  var TOOL_BTN = {
+    rect: 't-rect', ellipse: 't-ellipse', arrow: 't-arrow', pencil: 't-pencil',
+    marker: 't-marker', text: 't-text', mosaic: 't-mosaic', blur: 't-blur'
+  };
+  for (var key in ICONS) {
+    var el = document.getElementById(key);
+    if (el) el.innerHTML = ICONS[key];
+  }
+
+  window.addEventListener('resize', function () {
+    W = window.innerWidth; H = window.innerHeight;
+    sizeCanvas();
+    if (region) { paintRegion(region); placeBar(); redraw(); }
+  });
+
+  function sizeCanvas() {
+    ink.width = W; ink.height = H;
+    ink.style.width = W + 'px'; ink.style.height = H + 'px';
+  }
+  sizeCanvas();
+
+  function norm(a, b) {
+    return {
+      x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+      w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y)
+    };
+  }
+  function inside(r, p) {
+    return !!r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+  }
+  function localXY(e) { return { x: e.clientX, y: e.clientY }; }
+
+  // Region + shades. Called both while dragging and after release, so the
+  // region never moves: that is the whole point of framing in place.
+  function paintRegion(r) {
+    sel.style.display = 'block';
+    sel.style.left = r.x + 'px'; sel.style.top = r.y + 'px';
+    sel.style.width = r.w + 'px'; sel.style.height = r.h + 'px';
+    veil.style.display = 'none';   // inside must stay at full brightness
+    sizeTip.style.display = 'block';
+    sizeTip.textContent = Math.round(r.w) + ' × ' + Math.round(r.h);
+    sizeTip.style.left = (r.x + 6) + 'px';
+    sizeTip.style.top = (r.y + 6) + 'px';
+    var dim = 'position:fixed;background:rgba(0,0,0,0.45);display:block;';
+    shades.top.style.cssText = dim + 'left:0;top:0;width:' + W + 'px;height:' + Math.max(0, r.y) + 'px';
+    shades.left.style.cssText = dim + 'left:0;top:' + r.y + 'px;width:' + Math.max(0, r.x) + 'px;height:' + r.h + 'px';
+    shades.right.style.cssText = dim + 'left:' + (r.x + r.w) + 'px;top:' + r.y + 'px;width:' + Math.max(0, W - r.x - r.w) + 'px;height:' + r.h + 'px';
+    shades.bottom.style.cssText = dim + 'left:0;top:' + (r.y + r.h) + 'px;width:' + W + 'px;height:' + Math.max(0, H - r.y - r.h) + 'px';
+  }
+
+  function clearRegion() {
+    region = null;
+    mode = 'select';
+    strokes = []; redoStack = []; live = null;
+    cancelText();
+    sel.style.display = 'none';
+    sizeTip.style.display = 'none';
+    for (var k in shades) shades[k].style.display = 'none';
+    veil.style.display = '';
+    bar.classList.remove('on');
+    tip.style.display = '';
+    redraw();
+    syncButtons();
+  }
+
+  // ── Annotation drawing ────────────────────────────────────────────────
+  // Every stroke keeps window CSS px coordinates. The on-screen canvas uses
+  // identity transform; export() applies scale(devicePixelRatio) + the region
+  // offset, so the same drawStroke paints both layers.
+  function drawStroke(c, s) {
+    c.save();
+    if (s.kind === 'rect' || s.kind === 'ellipse') {
+      c.lineWidth = 2; c.strokeStyle = '#ff3b30';
+      c.fillStyle = 'rgba(255,59,48,0.12)';
+      var bx = Math.min(s.x0, s.x1), by = Math.min(s.y0, s.y1);
+      var bw = Math.abs(s.x1 - s.x0), bh = Math.abs(s.y1 - s.y0);
+      if (s.kind === 'rect') {
+        c.beginPath(); c.rect(bx, by, bw, bh); c.fill(); c.stroke();
+      } else {
+        c.beginPath();
+        c.ellipse(bx + bw / 2, by + bh / 2, bw / 2, bh / 2, 0, 0, Math.PI * 2);
+        c.fill(); c.stroke();
+      }
+    } else if (s.kind === 'arrow') {
+      var dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+      var len = Math.sqrt(dx * dx + dy * dy) || 1;
+      var head = Math.min(22, Math.max(10, len * 0.28));
+      var ux = dx / len, uy = dy / len;
+      var hx = s.x1 - ux * head, hy = s.y1 - uy * head;
+      var px = -uy, py = ux;
+      c.lineWidth = 2; c.strokeStyle = '#ff3b30';
+      c.beginPath(); c.moveTo(s.x0, s.y0); c.lineTo(hx, hy); c.stroke();
+      c.fillStyle = '#ff3b30';
+      c.beginPath();
+      c.moveTo(s.x1, s.y1);
+      c.lineTo(hx + px * head * 0.42, hy + py * head * 0.42);
+      c.lineTo(hx - px * head * 0.42, hy - py * head * 0.42);
+      c.closePath(); c.fill();
+    } else if (s.kind === 'pencil' || s.kind === 'marker') {
+      var pts = s.points || [];
+      if (pts.length < 2) { c.restore(); return; }
+      c.lineCap = 'round'; c.lineJoin = 'round';
+      if (s.kind === 'marker') {
+        c.lineWidth = 10; c.strokeStyle = 'rgba(255,59,48,0.45)';
+      } else {
+        c.lineWidth = 2; c.strokeStyle = '#ff3b30';
+      }
+      c.beginPath(); c.moveTo(pts[0].x, pts[0].y);
+      for (var i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+      c.stroke();
+    } else if (s.kind === 'mosaic' || s.kind === 'blur') {
+      var mx = Math.min(s.x0, s.x1), my = Math.min(s.y0, s.y1);
+      var mw = Math.abs(s.x1 - s.x0), mh = Math.abs(s.y1 - s.y0);
+      if (mw < 1 || mh < 1) { c.restore(); return; }
+      c.imageSmoothingEnabled = true;
+      if (BITMAP_READY) {
+        // Mosaic: one flat colour per block, sampled from the frozen bitmap.
+        // Blur: downscale then upscale the region, which is transform-safe and
+        // looks the same on screen and in the export.
+        var block = s.kind === 'mosaic' ? 10 : 8;
+        var tmp = document.createElement('canvas');
+        tmp.width = Math.max(1, Math.round(mw / block));
+        tmp.height = Math.max(1, Math.round(mh / block));
+        tmp.getContext('2d').drawImage(stage, mx, my, mw, mh, 0, 0, tmp.width, tmp.height);
+        if (s.kind === 'blur') {
+          c.drawImage(tmp, 0, 0, tmp.width, tmp.height, mx, my, mw, mh);
+        } else {
+          for (var yy = 0; yy < mh; yy += block) {
+            // tmp is the region downscaled by `block`, so 1 tmp pixel == 1 block
+            var bx0 = Math.floor(xx / block), by0 = Math.floor(yy / block);
+            if (bx0 >= tmp.width || by0 >= tmp.height) continue;
+            var sw = Math.min(block, mw - xx), sh = Math.min(block, mh - yy);
+            var sww = Math.min(Math.max(1, Math.ceil(sw / block)), tmp.width - bx0);
+            var shh = Math.min(Math.max(1, Math.ceil(sh / block)), tmp.height - by0);
+            c.drawImage(tmp, bx0, by0, sww, shh, mx + xx, my + yy, sw, sh);
+          }
+        }
+      }
+    } else if (s.kind === 'text') {
+      c.font = '600 ' + TEXT_PX + 'px "Microsoft YaHei", "Segoe UI", sans-serif';
+      c.textBaseline = 'top'; c.lineJoin = 'round';
+      c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.72)';
+      c.strokeText(s.text, s.x0, s.y0);
+      c.fillStyle = '#ff3b30';
+      c.fillText(s.text, s.x0, s.y0);
+    }
+    c.restore();
+  }
+
+  function redraw() {
+    var c = ink.getContext('2d');
+    c.clearRect(0, 0, ink.width, ink.height);
+    if (!region) return;
+    c.save();
+    c.beginPath();
+    c.rect(region.x, region.y, region.w, region.h);
+    c.clip();                       // annotations only count inside the frame
+    for (var i = 0; i < strokes.length; i++) drawStroke(c, strokes[i]);
+    if (live) drawStroke(c, live);
+    c.restore();
+  }
+
+  // ── Toolbar placement: below the region, above it when there is no room ─
+  function barSize() {
+    var w = bar.offsetWidth || 430, h = bar.offsetHeight || 34;
+    return { width: w, height: h };
+  }
+  function placeBar() {
+    if (!region) return;
+    var b = barSize();
+    var gap = 6;
+    var fitsBelow = region.y + region.h + gap + b.height <= H;
+    var y = fitsBelow ? region.y + region.h + gap : region.y - gap - b.height;
+    var x = Math.min(Math.max(0, region.x), Math.max(0, W - b.width));
+    bar.style.left = Math.round(x) + 'px';
+    bar.style.top = Math.round(Math.min(Math.max(0, y), Math.max(0, H - b.height))) + 'px';
+  }
+
+  function setTool(name) {
+    tool = name;
+    syncButtons();
+  }
+  function syncButtons() {
+    for (var k in TOOL_BTN) {
+      var el = document.getElementById(TOOL_BTN[k]);
+      if (el) el.classList.toggle('active', mode === 'annotate' && tool === k);
+    }
+    document.getElementById('t-undo').disabled = strokes.length === 0;
+    document.getElementById('t-redo').disabled = redoStack.length === 0;
+  }
+
+  function undo() {
+    if (!strokes.length) return;
+    redoStack.push(strokes.pop());
+    redraw(); syncButtons();
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    strokes.push(redoStack.pop());
+    redraw(); syncButtons();
+  }
+  function pushStroke(s) {
+    strokes.push(s);
+    redoStack = [];
+    redraw(); syncButtons();
+  }
+
+  // ── Text tool ─────────────────────────────────────────────────────────
+  function commitText() {
+    if (!txt) return;
+    var el = txt.el, x = txt.x, y = txt.y;
+    var s = (el.value || '').trim();
+    txt = null;
+    try { el.remove(); } catch (e) { /* already gone */ }
+    if (s) pushStroke({ kind: 'text', x0: x, y0: y, x1: x, y1: y, text: s });
+  }
+  function cancelText() {
+    if (!txt) return;
+    var el = txt.el;
+    txt = null;
+    try { el.remove(); } catch (e) { /* already gone */ }
+  }
+  function askText(x, y) {
+    commitText();
+    var el = document.createElement('input');
+    el.type = 'text';
+    el.placeholder = '输入文字，回车确认';
+    el.style.left = Math.round(x) + 'px';
+    el.style.top = Math.round(y) + 'px';
+    el.style.minWidth = '110px';
+    el.style.height = Math.round(TEXT_PX * 1.7) + 'px';
+    el.style.fontSize = Math.round(TEXT_PX) + 'px';
+    el.style.lineHeight = Math.round(TEXT_PX * 1.7) + 'px';
+    // Keys stop here: Enter/Esc/R/... must not leak to the window-level keys.
+    el.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') commitText();
+      else if (ev.key === 'Escape') cancelText();
+    });
+    el.addEventListener('blur', commitText);
+    document.body.appendChild(el);
+    txt = { x: x, y: y, el: el };
+    setTimeout(function () { el.focus(); }, 0);
+  }
+
+  // ── Export: crop the frozen bitmap at native scale, bake the annotations ─
+  function exportDataUrl() {
+    if (!region) return '';
+    // Window CSS px -> bitmap px is devicePixelRatio, not window width / bitmap
+    // width: those only agree while the window exactly covers the display.
+    var scale = DPR > 0 ? DPR : 1;
+    var cw = Math.max(1, Math.round(region.w * scale));
+    var ch = Math.max(1, Math.round(region.h * scale));
+    var cv = document.createElement('canvas');
+    cv.width = cw; cv.height = ch;
+    var c = cv.getContext('2d');
+    if (BITMAP_READY) {
+      c.imageSmoothingEnabled = false;   // pixel-exact base, same pixels as the screen
+      c.drawImage(bitmap,
+        Math.round(region.x * scale), Math.round(region.y * scale), cw, ch,
+        0, 0, cw, ch);
+      c.imageSmoothingEnabled = true;
+    }
+    c.save();
+    c.scale(scale, scale);
+    c.translate(-region.x, -region.y);
+    c.beginPath(); c.rect(region.x, region.y, region.w, region.h); c.clip();
+    for (var i = 0; i < strokes.length; i++) drawStroke(c, strokes[i]);
+    c.restore();
+    return cv.toDataURL('image/png');
+  }
+
+  // ── Pointer flow ──────────────────────────────────────────────────────
+  // 工具条这些「界面部件」上的按下不算画布操作。否则点工具按钮会被当成一次
+  // 框选起手（工具条在选区外，落在 only-annotate 分支之外），松手时又因为
+  // 宽高不足被判定为误点，直接把选区清掉、退回重新框选。
+  function onChrome(e) {
+    var t = e.target;
+    return !!(t && t.closest && t.closest('#bar'));
+  }
+
+  document.addEventListener('mousedown', function (e) {
+    if (onChrome(e)) return;
+    if (e.button !== 0) return;
+    var p = localXY(e);
+    if (mode === 'annotate' && inside(region, p)) {
+      if (tool === 'text') { askText(p.x, p.y); e.preventDefault(); return; }
+      var kind = tool;
+      live = kind === 'pencil' || kind === 'marker'
+        ? { kind: kind, points: [p], x0: p.x, y0: p.y, x1: p.x, y1: p.y }
+        : { kind: kind, x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      e.preventDefault();
+      return;
+    }
+    commitText();
+    dragging = true;
+    dragStart = p;
+    strokes = []; redoStack = []; live = null;
+    bar.classList.remove('on');
+    tip.style.display = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    var p = localXY(e);
+    if (dragging) { paintRegion(norm(dragStart, p)); return; }
+    if (!live) return;
+    live.x1 = p.x; live.y1 = p.y;
+    if (live.points) live.points.push(p);
+    redraw();
+  });
+
+  document.addEventListener('mouseup', function (e) {
+    if (dragging) {
+      dragging = false;
+      var r = norm(dragStart, localXY(e));
+      dragStart = null;
+      if (r.w < 3 || r.h < 3) {          // treated as a stray click
+        clearRegion();
+        return;
+      }
+      region = r;
+      mode = 'annotate';
+      paintRegion(region);
+      bar.classList.add('on');
+      placeBar();
+      syncButtons();
+      redraw();
+      return;
+    }
+    if (!live) return;
+    var tiny = Math.abs(live.x1 - live.x0) < 3 && Math.abs(live.y1 - live.y0) < 3;
+    var s = live;
+    live = null;
+    if (tiny) { redraw(); return; }
+    pushStroke(s);
+  });
+
+  // Double click (or Ctrl+A, like Snipaste) selects the whole screen.
+  document.addEventListener('dblclick', function () {
+    if (mode === 'annotate') return;
+    region = { x: 0, y: 0, w: W, h: H };
+    mode = 'annotate';
+    paintRegion(region);
+    bar.classList.add('on');
+    placeBar();
+    syncButtons();
+    redraw();
+  });
+
+  // Right click: while framing it cancels, while annotating it re-frames.
+  document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    if (onChrome(e)) return;
+    commitText();
+    if (mode === 'annotate') { clearRegion(); return; }
+    if (ipc) ipc.cancel();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      if (mode !== 'annotate') { document.dispatchEvent(new Event('dblclick')); }
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'Escape') { cancelText(); if (ipc) ipc.cancel(); return; }
+    if (e.key === 'Enter') {
+      if (txt) { commitText(); return; }
+      if (mode === 'annotate' && ipc) ipc.confirm(exportDataUrl());
+      return;
+    }
+    if (e.key === ' ') {                     // Snipaste: toggle the tool strip
+      e.preventDefault();
+      bar.classList.toggle('on');
+      return;
+    }
+  });
+
+  document.getElementById('t-undo').addEventListener('click', undo);
+  document.getElementById('t-redo').addEventListener('click', redo);
+  document.getElementById('b-retake').addEventListener('click', clearRegion);
+  document.getElementById('b-cancel').addEventListener('click', function () {
+    if (ipc) ipc.cancel();
+  });
+  document.getElementById('b-ok').addEventListener('click', function () {
+    commitText();
+    if (ipc) ipc.confirm(exportDataUrl());
+  });
+  for (var t in TOOL_BTN) {
+    (function (name, id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('click', function () { setTool(name); });
+    })(t, TOOL_BTN[t]);
+  }
+  syncButtons();
+})();
+</script>
+</body>
+</html>

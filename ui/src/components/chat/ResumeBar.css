@@ -1,0 +1,73 @@
+/* 「继续」提示条：贴在做输入框上方，一行说完，不抢注意力。 */
+.resumebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* 左右留白跟消息列/输入框同一套：--chat-gutter，
+     右侧再补 10px（对话窗滚动条占掉的那 10px），这样提示条的左右边界
+     跟输入框严格对齐。之前写死的 12px 让它比对话区宽出一截（2026-09-27 用户抓）。 */
+  margin: 0 var(--chat-gutter) 6px;
+  margin-right: calc(var(--chat-gutter) + 10px);
+  padding: 7px 12px;
+  border: 1px solid var(--line, #333);
+  border-radius: 8px;
+  background: var(--panel, #1b1b1e);
+}
+
+.resumebar__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.resumebar__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, var(--text-primary));
+}
+
+.resumebar__meta {
+  font-size: 11px;
+  color: var(--dim, var(--text-tertiary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resumebar__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.resumebar__go,
+.resumebar__drop {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--line, #333);
+  background: transparent;
+  color: var(--text, var(--text-primary));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.resumebar__go {
+  border-color: var(--accent, #4c8dff);
+  color: var(--accent, #4c8dff);
+}
+
+.resumebar__drop {
+  color: var(--dim, var(--text-tertiary));
+}
+
+.resumebar__go:hover,
+.resumebar__drop:hover {
+  filter: brightness(1.2);
+}

@@ -1,0 +1,201 @@
+.md {
+  font-size: 13.6px;
+  line-height: 1.72;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+
+.md p { margin: 10px 0; }
+
+.md h1, .md h2, .md h3, .md h4 {
+  margin: 20px 0 10px;
+  font-weight: 600;
+  letter-spacing: -0.15px;
+  line-height: 1.35;
+}
+.md h1 { font-size: 17px; }
+.md h2 {
+  font-size: 15.5px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.md h3 { font-size: 14.2px; }
+.md h4 { font-size: 13.6px; color: var(--text-secondary); }
+
+.md ul, .md ol { margin: 10px 0; padding-left: 22px; }
+.md li { margin: 4px 0; }
+.md li::marker { color: var(--text-muted); }
+.md ul li::marker { color: var(--accent); }
+
+.md strong { font-weight: 600; color: var(--text-strong); }
+.md em { font-style: italic; color: var(--text-secondary); }
+.md del { color: var(--text-muted); }
+
+.md a {
+  color: var(--accent-text);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(139,142,248,0.35);
+  transition: border-color var(--motion-fast), color var(--motion-fast);
+}
+.md a:hover { color: var(--accent-text); border-bottom-color: var(--accent-text); }
+
+.md blockquote {
+  margin: 12px 0;
+  padding: 9px 14px;
+  border-left: 2.5px solid var(--accent);
+  background: rgba(99,102,241,0.055);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+}
+.md blockquote p { margin: 0; }
+
+.md hr {
+  margin: 18px 0;
+  border: none;
+  height: 1px;
+  background: var(--border-default);
+}
+
+/* Tables */
+.md-table-wrap {
+  margin: 12px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.8px;
+}
+.md thead { background: var(--bg-sunken); }
+.md th {
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.2px;
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+}
+.md td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.md tbody tr:last-child td { border-bottom: none; }
+.md tbody tr:hover { background: rgba(255,255,255,0.021); }
+
+/* Task lists */
+.md input[type='checkbox'] {
+  appearance: none;
+  width: 13px; height: 13px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 3px;
+  margin-right: 7px;
+  vertical-align: -1px;
+  position: relative;
+  background: var(--bg-app);
+}
+.md input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.md input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 3.5px; top: 0.5px;
+  width: 4px; height: 7.5px;
+  border: solid #fff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+.md li:has(> input[type='checkbox']) { list-style: none; margin-left: -18px; }
+
+/* Nested code blocks shouldn't double-margin */
+.md .codeblock { margin: 12px 0; }
+/* ── KaTeX math ──────────────────────────────────────────────────────────── */
+/* Block formulas can be wider than the message column: scroll, don't blow out. */
+.md .katex-display {
+  margin: 14px 0;
+  padding: 4px 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.md .katex-display > .katex {
+  white-space: nowrap;
+}
+.md .katex {
+  font-size: 1.04em;
+  color: var(--text-primary);
+}
+.md .katex .merror {
+  color: var(--text-secondary) !important;
+  background: var(--accent-soft);
+  border-radius: var(--radius-xs);
+  padding: 0 3px;
+}
+
+/* ── [1] citation chips ──────────────────────────────────────────────────── */
+.md-cite {
+  display: inline-block;
+  vertical-align: super;
+  position: relative;
+  top: -0.35em;
+  margin: 0 1px;
+  padding: 0 4.5px;
+  font-size: 10px;
+  line-height: 1.5;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--radius-xs);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+.md-cite:hover {
+  background: rgba(99, 102, 241, 0.28);
+  border-bottom-color: var(--accent-text);
+  text-decoration: underline;
+}
+
+/* ── Footnotes ([^1]) ────────────────────────────────────────────────────── */
+.md .footnotes {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.md .footnotes h2,
+.md .footnotes .sr-only-heading {
+  display: none;
+}
+.md .footnotes ol {
+  padding-left: 18px;
+  margin: 0;
+}
+.md .footnotes li { margin: 2px 0; }
+.md .footnotes li::marker { color: var(--text-muted); }
+.md .footnotes a[data-footnote-backref],
+.md .footnotes .footnote-backref {
+  font-size: 10px;
+  vertical-align: super;
+  color: var(--accent-text);
+  border: none;
+  margin-left: 2px;
+}
+.md .footnotes .footnote-backref::before {
+  content: '↩';
+  font-size: 11px;
+}
+
+/* User-bubble variant: compact, no first/last margin games. */
+.md--user { font-size: 13.4px; }
+.md--user p { margin: 6px 0; }

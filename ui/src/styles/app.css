@@ -1,0 +1,336 @@
+/* ── Shell layout ───────────────────────────────────────────────── */
+/* ── Fluid shell ────────────────────────────────────────────────── */
+/* The window decides these, not a designer's fixed 1440 canvas. Same approach
+   common to responsive Electron shells (CSS vars for pane widths + @container,
+   viewport relatives): none of them auto-scales type — the layout reflows. */
+:root {
+  /* Fixed-pane policy, not proportional scaling: the sidebar is a fixed pane
+     (default 280) that auto-collapses to a 56px rail below 1024, and
+     the centre takes the rest. Gutters still grow with the window. */
+  --sidebar-w: 280px;
+  --chat-gutter: clamp(16px, 2.2vw, 40px);
+}
+
+/* ── Inline images: user attachments, agent output, tool results ───────── */
+.md-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin: 10px 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  object-fit: contain;
+}
+/* Video containers (mp4/webm) get a player instead of a picture. */
+.md-video {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  max-height: 420px;
+  margin: 10px 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: #000;
+}
+.md-image__ref {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.toolcard__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.toolcard__image {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  object-fit: cover;
+}
+
+.app-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+/* Windows-style chrome lives in the TopBar now (see TopBar.css) — the old
+   decorative titlebar/winctl rules went with the element. */
+
+/* 图片背景（壁纸）模式。
+   注意：data-wallpaper / data-theme 都写在 <html> 上（JS 里 applyWallpaper 写的是
+   documentElement），所以选择器必须是 `[data-wallpaper=..] .app-frame`，
+   写成 `.app-frame[data-wallpaper=..]` 永远匹配不上——壁纸会静默不生效。
+   halo（默认光晕）不进这里，深色/浅色观感一个字节不变。 */
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame {
+  background-image:
+    linear-gradient(var(--wall-scrim), var(--wall-scrim)),
+    var(--wallpaper, none),
+    var(--bg-art);
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center;
+}
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .workspace {
+  background-color: transparent;
+  background-image: none;
+}
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .sidebar {
+  background-color: color-mix(in srgb, var(--bg-sidebar) 80%, transparent);
+}
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .topbar {
+  background-image: none;
+  background-color: color-mix(in srgb, var(--bg-panel) 80%, transparent);
+}
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .statusbar {
+  background-color: color-mix(in srgb, var(--bg-statusbar) 80%, transparent);
+}
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .composer {
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-app) 78%, transparent) 32%);
+}
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .settings-surface {
+  background-color: color-mix(in srgb, var(--bg-app) 92%, transparent);
+}
+
+/* 压得很轻 —— 背景要真能看见（用户原话「并没有看到背景」）。
+   可读性不靠把图糊掉，而是让助手正文坐上一层半透明面板（见下）。 */
+[data-wallpaper='aurora'] .app-frame { --wall-scrim: rgba(15, 15, 16, 0.26); }
+[data-wallpaper='deepsea'] .app-frame { --wall-scrim: rgba(15, 15, 16, 0.20); }
+[data-theme='light'][data-wallpaper='snow'] .app-frame { --wall-scrim: rgba(244, 244, 246, 0.22); }
+
+/* 壁纸模式：助手正文不再是「裸字躺在图上」，给它一层半透明面板 ——
+   图能看清、字也压得住 */
+[data-wallpaper]:not([data-wallpaper='halo']) .app-frame .msg--assistant .msg__content {
+  background-color: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-default) 65%, transparent);
+  border-radius: var(--radius-lg);
+  padding: 10px 13px;
+}
+
+/* 「透出壁纸」（默认档）：用户气泡也一起透（2026-09-27 用户口径
+   「这个透出要把用户输入的也透出」）。
+
+   气泡底原本是不透明渐变（--user-bubble-bg）。渐变没法直接 color-mix，
+   所以这里按同一组色标显式再写一份带 alpha 的 —— 只换这个 token，
+   气泡规则（background: var(--user-bubble-bg)）自己就跟着变，不用改组件。
+
+   透明度 0.82 是量出来的：最坏组合是「深色主题 + 底下一片纯白」，
+   正文仍是 ~6.7:1；浅色主题（雪原）底本来就亮、字是 #1b1b1f，余量更大。
+   两侧实色档不写规则，自动用回上面那份不透明渐变。 */
+[data-msg-surface='wallpaper'][data-wallpaper]:not([data-wallpaper='halo']) .app-frame {
+  --user-bubble-bg: linear-gradient(180deg, rgba(38, 38, 45, 0.82) 0%, rgba(33, 33, 39, 0.82) 100%);
+}
+[data-msg-surface='wallpaper'][data-theme='light'][data-wallpaper='snow'] .app-frame {
+  --user-bubble-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(244, 244, 247, 0.82) 100%);
+}
+
+/* 外观页「消息底纹 = 两侧实色」：同一张面板改成不透明，和用户气泡一致。
+   选择器比上面那条多一个 [data-msg-surface]，优先级更高，不需要 !important。
+   默认（wallpaper）不写任何规则 —— 上面那条就是默认观感。 */
+[data-msg-surface='solid'][data-wallpaper]:not([data-wallpaper='halo']) .app-frame .msg--assistant .msg__content {
+  background-color: var(--bg-panel);
+  border-color: color-mix(in srgb, var(--border-default) 82%, transparent);
+}
+
+.app-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+.workspace {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background-color: var(--bg-app);
+  /* 背景艺术：只铺在工作区（侧栏与顶栏保持干净），fixed 让它不跟着消息滚 */
+  background-image: var(--bg-art);
+  background-repeat: no-repeat;
+  /* Children adapt to the pane they sit in, not the whole window. */
+  container-type: inline-size;
+  container-name: workspace;
+  /* Always reserve the scrollbar: a toggling gutter feeds back into width and
+     makes auto-fit grids and container queries flicker. */
+  scrollbar-gutter: stable;
+}
+.chat-column {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Shared primitives ──────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn--ghost { border-color: transparent; }
+.btn--outline { border-color: var(--border-default); }
+.btn--outline:hover { border-color: var(--border-strong); }
+.btn--primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.btn--primary:hover { background: var(--accent-hover); color: #fff; }
+.btn--danger { background: var(--semantic-danger); color: #fff; }
+.btn--danger:hover { background: #f05757; color: #fff; }
+.btn--icon { width: 30px; padding: 0; justify-content: center; }
+.btn--sm { height: 26px; font-size: 12px; padding: 0 9px; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.15px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.chip--neutral { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-default); }
+.chip--success { background: var(--semantic-success-soft); color: var(--semantic-success); border-color: rgba(16,185,129,0.28); }
+.chip--warn    { background: var(--semantic-warn-soft); color: var(--semantic-warn); border-color: rgba(245,158,11,0.28); }
+.chip--danger  { background: var(--semantic-danger-soft); color: var(--semantic-danger); border-color: rgba(239,68,68,0.28); }
+.chip--info    { background: var(--semantic-info-soft); color: var(--info-text); border-color: rgba(59,130,246,0.28); }
+.chip--accent  { background: var(--accent-soft); color: var(--accent-text); border-color: rgba(99,102,241,0.3); }
+
+.mono { font-family: var(--font-mono); font-size: 12px; }
+
+.divider { height: 1px; background: var(--border-subtle); }
+
+/* Generic page frame (usage / settings) */
+.page {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 26px clamp(20px, 2.4vw, 44px) 60px;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: page;
+}
+.page__head { margin-bottom: 22px; }
+.kbd-hint {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 15px;
+  vertical-align: middle;
+}
+.page__title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+}
+.page__desc {
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  /* Measure, not a pixel cap: readable on any width, fills a normal window. */
+  max-width: 88ch;
+}
+
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.card__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card__sub { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+.card__body { padding: 16px; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.15px;
+}
+.field__hint { font-size: 11.5px; color: var(--text-muted); }
+
+.input {
+  height: 34px;
+  width: 100%;
+  padding: 0 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.input:hover { border-color: var(--border-strong); }
+.input:focus { border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.input::placeholder { color: var(--text-muted); }
+
+/* Toggle switch */
+.switch {
+  position: relative;
+  width: 34px;
+  height: 19px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
+  transition: background var(--motion-base), border-color var(--motion-base);
+  flex: 0 0 auto;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 1.5px; left: 1.5px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #8b8b94;
+  transition: transform var(--motion-base), background var(--motion-base);
+}
+.switch--on { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 1px 2px rgba(0,0,0,0.25); }
+.switch--on::after { transform: translateX(15px); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  .switch, .switch::after { transition: none; }
+}

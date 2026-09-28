@@ -1,0 +1,229 @@
+/* 模型面板（用户口径 2026-09-26 晚，第二次改）：**点开只有列表**，
+   鼠标移到哪一行才在列表左边浮出那一行的思考 / 上下文详情；价格整行已去掉。
+
+   呈现层是**贴着底部模型 chip 浮出来的浮层**（用户口径：模型选择走浮层、
+   模型设置才是弹窗）。边框 / 宽度 / 位置由 .cctl__menu--mpanel 提供，且**不裁切**
+   ——详情浮层要能浮出列表之外。菜单是右贴边停靠的（右边只剩 12px），所以详情
+   默认往**左**浮，只有窗口窄到左边塞不下才翻到右边。页面本体不增高、不出现页面级
+   滚动条（浮层是 absolute，不进流）。 */
+
+/* 列表 + 悬浮详情。position: relative 是详情浮层的定位基准。 */
+.mpanel {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+/* 列表（自己滚）。宽度由外层浮层给，单列铺满。 */
+.mpanel__list {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: min(58vh, 430px);
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.mpanel__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.mpanel__item:hover { background: var(--bg-hover); }
+.mpanel__item.is-active { background: var(--bg-active); color: var(--text-primary); }
+
+.mpanel__item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mpanel__item-num {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+/* 状态标签（红底那种），目前只用来标「没配 key」——限时免费/折扣我们没有 */
+.mpanel__tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.mpanel__add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 8px;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 7px 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.mpanel__add:hover { color: var(--text-primary); }
+
+/* 详情：**悬停才出现**，浮在列表左边（不占流、不撑高列表）。
+   锚**下沿**（bottom: 0）：列表贴着 chip，下沿离窗口底只有十几像素，往下长
+   立刻顶出屏幕、还会被 overflow 裁掉点不到；往下锚改成往上长，上方整片对话区
+   都是可用空间。卡片**不裁切**（overflow: visible），二级小窗体才能浮到卡片外。 */
+.mpanel__detail {
+  position: absolute;
+  top: auto;
+  bottom: 0;
+  right: calc(100% + 6px);
+  z-index: 20;
+  width: 246px;
+  padding: 11px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--bg-card);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+/* 窗口窄、左边塞不下时翻到列表右边 */
+.mpanel__detail.is-right {
+  right: auto;
+  left: calc(100% + 6px);
+}
+
+.mpanel__title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mpanel__desc {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.mpanel__warn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--semantic-warn);
+  font-size: 11.5px;
+}
+
+.mpanel__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.mpanel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.mpanel__row:hover { background: var(--bg-hover); }
+.mpanel__row--static,
+.mpanel__row--static:hover { background: transparent; cursor: default; }
+
+.mpanel__row-label { color: var(--text-secondary); }
+.mpanel__row-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-primary);
+}
+
+/* 行 + 它的二级菜单（思考档位 / 窗口档位）：**在卡片里就地展开**。
+   早前是「贴着这一行浮到卡片左边」，但卡片为了限高开了 overflow-y: auto——
+   浮到卡片外的部分会被 overflow 裁掉，鼠标既看不见也点不到（实测
+   elementFromPoint(选项中心) 命中的是下面那层的 .composer，一点就点到面板外，
+   面板反被关掉）。就地展开不吃裁切，也不跟窗口高度较劲。 */
+.mpanel__rowwrap { position: relative; }
+.mpanel__row.is-open { background: var(--bg-hover); }
+
+/* 二级菜单：点一下就贴这一行**旁边**浮出一个小窗体（用户口径 2026-09-27：
+   不要往下折叠展开）。浮到卡片外是必须的（卡片只有 246px 宽，塞进去要挤掉内容），
+   所以卡片本身**不许裁切**——`.mpanel__detail` 的 overflow 保持 visible，
+   否则浮层被裁掉，看得见点不到（见 ui-geometry-verification.md §4.1）。
+   注意别再跟详情里的 .mpanel__desc 撞名——撞过一次，弹窗样式套到擅长行上。 */
+.mpanel__pop {
+  position: absolute;
+  top: -6px;
+  right: calc(100% + 8px);
+  z-index: 30;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--bg-card);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+/* 窗口底部没地方就贴着这一行的下沿往上长，别顶出屏幕 */
+.mpanel__pop.is-up {
+  top: auto;
+  bottom: -6px;
+}
+
+.mpanel__choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.mpanel__choice:hover { background: var(--bg-hover); }
+.mpanel__choice.is-active { color: var(--text-primary); }
+
+.mpanel__foot {
+  margin-top: auto;
+  padding-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mpanel__empty {
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* 二级浮层出栈：面板整块在 .cctl__menu 的 z-40 里，浮层只要压过面板内容即可。 */

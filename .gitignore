@@ -1,0 +1,36 @@
+node_modules/
+dist/
+*.log
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.pid
+
+# 用户设置与密钥：绝不入库
+config.json
+.env
+.env.*
+!.env.example
+
+# 用户数据（会话库 / 断点 / 用量 / 工作区）
+data/
+userdata/
+*.db
+*.db-shm
+*.db-wal
+
+# 构建产物
+electron/renderer.bundle.js
+electron/ui/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 构建产物（含 TS 增量编译缓存）
+*.tsbuildinfo
+ui/assets/

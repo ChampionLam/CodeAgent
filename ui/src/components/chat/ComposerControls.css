@@ -1,0 +1,184 @@
+/* 输入区控制条：一个 chip（模型名 + 思考档位，如「MiniMax-M3 深」），跟工具图标同一行。
+   位置就在输入框下方——敲字时眼睛在这一带，不用去顶栏找模型名。 */
+.cctl-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: wrap;
+  /* 推到右边：模型跟发送键挨着（WorkBuddy 那种），不要在中间飘着 */
+  margin-left: auto;
+}
+
+.cctl { position: relative; }
+
+.cctl__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 300px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.cctl__btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); }
+.cctl__btn.is-open {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.cctl__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 名字前缀：让「深」「5.4k / 1M」这种值一眼知道是什么 */
+.cctl__name {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+.cctl__value {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Optical alignment (user ask: row-3 text must sit level with the status dot
+     and the chevron). A 12px font centered in its line box puts the lowercase
+     mass BELOW the box center. Measured on the real Windows render (12px):
+     baseline 840.99, x-height top 834.96 -> x-band center 837.98, while the
+     dot / chevron centers are 837.00, i.e. the text reads 0.98px low.
+     Lifting the label 1px makes the two coincide (residual -0.02px). */
+  position: relative;
+  top: -1px;
+}
+
+.cctl__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.cctl__dot--ok { background: #34d399; }
+.cctl__dot--warn { background: var(--warn, #f59e0b); }
+
+.cctl__menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  /* 锚在 chip 的右缘往左伸：chip 用 left:0 会让面板伸出窗口被切（实测溢出 51px）。
+     chip 是本行最右的控件之一，右缘离窗口边还有 ~90px，够放。 */
+  left: auto;
+  right: 0;
+  z-index: 40;
+  min-width: 250px;
+  max-width: min(340px, calc(100vw - 32px));
+  /* 菜单要短：模型多的时候滚动，但别铺满半屏 */
+  max-height: min(340px, 50vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+/* 面板不许贴着窗口边（用户口径：太贴边）——留出内缩 */
+.cctl__menu--right { left: auto; right: 12px; }
+
+/* 模型面板形态（用户口径 2026-09-26）：模型**选择**是贴着 chip 浮出来的浮层，
+   不是居中弹窗（弹窗留给「模型设置」）。普通菜单的窄宽 / 短高在这里放开；
+   容器**不裁切**，二级浮层（思考强度 / 窗口档位）要能浮出两栏之外，纵向滚动
+   交给面板两栏各自的 max-height。 */
+.cctl__menu--mpanel {
+  /* 单列（点开只有模型列表）；详情是悬停浮层，不在流里，所以宽度按列表给 */
+  min-width: 248px;
+  max-width: 248px;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border-radius: 12px;
+}
+
+/* 弹窗形态（模型面板，用户 #6）：fixed 遮罩铺满视口、半透明，弹窗在其中
+   居中。fixed 元素不参与文档流，页面本体不增高、不出现页面级滚动条；
+   弹窗自身限高在 ModelPanel.css 的 .mpanel-modal 上。 */
+.cctl__modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  /* 居中由 .mpanel-modal 的 margin:auto 完成（对超矮视口更稳） */
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+  animation: backdrop-in 160ms ease-out;
+}
+
+.cctl__menu-head {
+  padding: 5px 8px 7px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.cctl__group + .cctl__group {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+.cctl__group-title {
+  padding: 2px 8px 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.cctl__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.cctl__item:hover { background: rgba(255, 255, 255, 0.05); }
+.cctl__item.is-active { color: var(--text-primary); }
+.cctl__item.is-active .cctl__item-text { font-weight: 500; }
+.cctl__item-text { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; }
+.cctl__item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cctl__item-sub {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cctl__item-warn {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--warn, #f59e0b);
+  font-size: 10px;
+}
+
+.cctl__hint {
+  padding: 6px 8px 3px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.cctl__empty {
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}

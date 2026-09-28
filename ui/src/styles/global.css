@@ -1,0 +1,316 @@
+
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-stack);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+:root {
+  /* Tokens → CSS variables (so global stylesheet + inline use the same source) */
+  --bg-app: #0f0f10;
+  --bg-sidebar: #131316;
+  --bg-panel: #1a1a1d;
+  --bg-card: #1e1e22;
+  --bg-hover: #232328;
+  --bg-active: #2a2a31;
+  --bg-code: #0c0c0d;
+  /* 被 app.css 引用但 :root 从没定义过（背景会静默失效）——补上 */
+  --bg-elevated: #232328;
+  /* 下面几个 token 的深色值 = 原来写死的硬编码，切主题时深色观感不变，
+     浅色下换掉，避免「深底 + 深字」（审计抓到 1.11 / 2.17 两处）。 */
+  /* 语义「文字」色：深色底要浅色版，浅底要深色版（审计里 1.68 那条警告就是
+     这里没分套）。值取现状里那几个硬编码的代表值，深色观感基本不变。 */
+  --danger-text: #f0a8a8;
+  --warn-text: #f0b45c;
+  --info-text: #7dd3fc;
+  /* 强调粗体（原来写死 #fff，浅底上就成白字了） */
+  --text-strong: #ffffff;
+  --bg-statusbar: #101013;
+  --bg-row-active: #24242a;
+  --composer-bg: #131820;
+  --composer-bg-focus: #171d26;
+  /* 更暗一档的面板（工具卡 / 审批卡 / 卡片底栏） */
+  --bg-sunken: #16161a;
+  /* 用户气泡底色（原来是写死的深色渐变，切浅色主题会瞎） */
+  --user-bubble-bg: linear-gradient(180deg, #26262d 0%, #212127 100%);
+  /* 渐变型「深色面」：顶栏 / 侧栏按钮 / 图表柱。深色值 = 原硬编码，观感不变；
+     浅色另给一套（顶栏原来是写死的深色渐变，切浅色主题顶上还是黑的）。 */
+  --grad-topbar: linear-gradient(180deg, #17171a 0%, #141417 100%);
+  --grad-btn: linear-gradient(180deg, #26262c 0%, #212127 100%);
+  --grad-btn-hover: linear-gradient(180deg, #2d2d34 0%, #26262c 100%);
+  --grad-chart-bar: linear-gradient(180deg, #3d3d47 0%, #2c2c34 100%);
+  --chart-swatch: #3a3a44;
+  /* 强调色渐变（跟随用户选的强调色与主题） */
+  --grad-accent: linear-gradient(180deg, var(--accent-hover) 0%, var(--accent) 100%);
+  --grad-accent-x: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  /* 背景艺术：层叠径向光晕（纯 CSS，不引图片资源）。刻意压得很淡，
+     正文直接坐在它上面也要够读——审计 below3 必须为 0。 */
+  --bg-art:
+    radial-gradient(1100px 620px at 12% -6%, rgba(99, 102, 241, 0.20), transparent 62%),
+    radial-gradient(900px 520px at 92% 4%, rgba(14, 165, 233, 0.13), transparent 58%),
+    radial-gradient(1000px 700px at 62% 108%, rgba(139, 92, 246, 0.16), transparent 62%),
+    radial-gradient(700px 420px at 8% 88%, rgba(16, 185, 129, 0.10), transparent 60%);
+  /* 输入区上方的渐隐（原来是写死的深色 rgba，浅色主题下会糊出一条黑边） */
+  --fade-bottom: linear-gradient(180deg, rgba(15, 15, 16, 0) 0%, var(--bg-app) 32%);
+  /* 滚动条与选区：原来写死深灰，浅色主题下就是一条黑滚动条
+     （伪元素，querySelectorAll 扫不到，对比度审计的第二个盲区） */
+  --scrollbar-thumb: #2a2a2e;
+  /* 壁纸（用户选图片风格时由 JS 写成 url(...)；默认 none = 走 CSS 光晕） */
+  --wallpaper: none;
+  --wall-scrim: rgba(15, 15, 16, 0.52);
+  --scrollbar-thumb-hover: #3a3a40;
+  /* 强调色「文字」形态：深色底要浅，浅色底要深 */
+  --accent-text: #a5a8fa;
+  /* 消息正文字号（设置 → 外观可调） */
+  --chat-font-size: 13.6px;
+
+  --border-subtle: #222226;
+  --border-default: #2a2a2e;
+  --border-strong: #36363c;
+  --border-focus: #6366f1;
+
+  /* 原来写成了 var(--text-primary) 自引用 -> 计算值周期性无效，color 会退化成
+     「继承」；这也是为什么有些地方被迫硬编码 #e8e8ea。这里给出真值。 */
+  --text-primary: #e8e8ea;
+  --text-secondary: #a8a8b0;
+  --text-tertiary: #8b8b94;
+  --text-muted: #6f6f79;
+  --text-inverse: #0f0f10;
+
+  --accent: #6366f1;
+  --accent-hover: #7c7ff5;
+  --accent-soft: rgba(99, 102, 241, 0.12);
+  --accent-ring: rgba(99, 102, 241, 0.35);
+
+  --semantic-success: #10b981;
+  --semantic-success-soft: rgba(16, 185, 129, 0.12);
+  --semantic-warn: #f59e0b;
+  --semantic-warn-soft: rgba(245, 158, 11, 0.12);
+  --semantic-danger: #ef4444;
+  --semantic-danger-soft: rgba(239, 68, 68, 0.12);
+  --semantic-info: #3b82f6;
+  --semantic-info-soft: rgba(59, 130, 246, 0.12);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
+  --shadow-focus: 0 0 0 3px rgba(99,102,241,0.25);
+
+  --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --motion-fast: 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-base: 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-slow: 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  outline: none;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+input, textarea {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+/* Scrollbars — subtle, on-brand */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid var(--bg-app);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+
+::selection {
+  background: var(--accent-ring);
+  color: var(--text-primary);
+}
+
+/* Focus ring */
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Streaming cursor */
+/* A hard 50/50 on-off blink read as flicker next to streaming text; this breathes
+   instead, so the caret still signals "still writing" without flashing. */
+@keyframes streaming-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+.streaming-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1em;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  border-radius: 1px;
+  animation: streaming-breathe 1.4s ease-in-out infinite;
+  position: relative;
+  top: 2px;
+}
+
+/* Tool-call running shimmer */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(99,102,241,0) 0%,
+    rgba(99,102,241,0.5) 50%,
+    rgba(99,102,241,0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* Pulse for status dots */
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.55; }
+}
+.pulse-dot {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Modal backdrop */
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-backdrop { animation: backdrop-in 160ms ease-out; }
+.modal-card { animation: modal-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* Skeleton */
+@keyframes skeleton {
+  0% { opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { opacity: 0.55; }
+}
+.skeleton { animation: skeleton 1.4s ease-in-out infinite; background: var(--bg-hover); }
+
+/* ═══ 浅色主题 ══════════════════════════════════════════════════════════
+   data-theme 由 ui/src/lib/appSettings.ts 写（localStorage，纯界面偏好）。
+   只覆盖 token 层：全仓 323 处硬编码颜色里，真正影响可读性的
+   「浅色字 / 深色底」已在同一次改动里换成 token（--accent-text /
+   --bg-sunken / --user-bubble-bg / --text-primary）；代码块用浅底 +
+   highlight.css 的浅色变体。判定不靠肉眼：真机上跑自动对比度审计。 */
+:root[data-theme='light'] {
+  --bg-app: #f4f4f6;
+  --bg-sidebar: #ececef;
+  --bg-panel: #fafafb;
+  --bg-card: #ffffff;
+  --bg-hover: #ececef;
+  --bg-active: #e2e2e7;
+  --bg-code: #f6f6f8;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f1f1f3;
+
+  --border-subtle: #e6e6ea;
+  --border-default: #d9d9df;
+  --border-strong: #c3c3cb;
+  --border-focus: #4f46e5;
+
+  --text-primary: #1b1b1f;
+  --text-secondary: #4a4a53;
+  --text-tertiary: #6a6a74;
+  --text-muted: #8b8b95;
+  --text-inverse: #ffffff;
+
+  --accent-text: #4f46e5;
+  --user-bubble-bg: linear-gradient(180deg, #ffffff 0%, #f4f4f7 100%);
+  --grad-topbar: linear-gradient(180deg, #ffffff 0%, #f7f7fa 100%);
+  --grad-btn: linear-gradient(180deg, #ffffff 0%, #f1f1f5 100%);
+  --grad-btn-hover: linear-gradient(180deg, #f7f7fa 0%, #ececf1 100%);
+  --bg-art:
+    radial-gradient(1100px 620px at 12% -6%, rgba(99, 102, 241, 0.13), transparent 62%),
+    radial-gradient(900px 520px at 92% 4%, rgba(14, 165, 233, 0.10), transparent 58%),
+    radial-gradient(1000px 700px at 62% 108%, rgba(139, 92, 246, 0.11), transparent 62%),
+    radial-gradient(700px 420px at 8% 88%, rgba(16, 185, 129, 0.08), transparent 60%);
+  --fade-bottom: linear-gradient(180deg, rgba(244, 244, 246, 0) 0%, var(--bg-app) 32%);
+  --scrollbar-thumb: #c6c6d0;
+  --wall-scrim: rgba(244, 244, 246, 0.72);
+  --scrollbar-thumb-hover: #adadba;
+  --grad-chart-bar: linear-gradient(180deg, #d6d6de 0%, #c4c4cd 100%);
+  --chart-swatch: #d6d6de;
+  /* 审计结果：原来的 #8b8b95 在 #ececef 上只有 2.86（<3.0）——压深。
+     语义色同理：浅底上要深色版，否则警告/成功文字看不见（1.68 / 2.43）。 */
+  --text-muted: #6b6b75;
+  --text-tertiary: #5c5c66;
+  --semantic-warn: #b45309;
+  --semantic-success: #047857;
+  --semantic-info: #1d4ed8;
+  --semantic-danger: #b91c1c;
+
+  --danger-text: #b91c1c;
+  --warn-text: #b45309;
+  --info-text: #1d4ed8;
+  --text-strong: #1b1b1f;
+
+  --bg-statusbar: #ececef;
+  --bg-row-active: #e2e2e8;
+  --composer-bg: #ffffff;
+  --composer-bg-focus: #f7f7fb;
+
+  --shadow-sm: 0 1px 2px rgba(16, 16, 24, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 16, 24, 0.08), 0 0 0 1px rgba(16, 16, 24, 0.04);
+  --shadow-lg: 0 12px 32px rgba(16, 16, 24, 0.14), 0 0 0 1px rgba(16, 16, 24, 0.05);
+  --shadow-focus: 0 0 0 3px rgba(79, 70, 229, 0.22);
+}

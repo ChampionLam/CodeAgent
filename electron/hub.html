@@ -1,0 +1,220 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: file: blob:">
+<title>hub</title>
+<style>
+:root{
+  --bg:#161619; --bd:#2c2f38; --inp:#0f1013; --inpbd:#2b2e37; --fg:#e9e9ec; --ph:#6f7280;
+  --ibtn:#1d2028; --ibtnbd:#2f333e; --chip:#1b1e26; --chipbd:#2e323d; --cname:#c3c7d2;
+  --cico:#252a35; --cicoic:#8d94a6; --sep:#262932; --muted:#7b7e8a; --hint:#5d6070; --accent:#1C7DF0;
+  --scth:#2a2a2e; --scthh:#3a3a40;
+}
+html[data-theme="light"]{
+  --bg:#fdfdfe; --bd:#e3e5ea; --inp:#f6f7fa; --inpbd:#e4e6ec; --fg:#1b1c20; --ph:#8b8f99;
+  --ibtn:#f2f4f8; --ibtnbd:#e2e5ec; --chip:#f7f8fb; --chipbd:#e6e9ef; --cname:#3a3d45;
+  --cico:#eceef4; --cicoic:#7b8092; --sep:#eceef3; --muted:#8a8d96; --hint:#a8abb4; --accent:#1C7DF0;
+  --scth:#c6c6d0; --scthh:#adadba;
+}
+*{box-sizing:border-box;margin:0;padding:0;font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+html,body{background:transparent;overflow:hidden}
+#bar{background:var(--bg);border:1px solid var(--bd);border-radius:12px;overflow:hidden;
+  box-shadow:0 16px 40px rgba(0,0,0,.42),0 2px 6px rgba(0,0,0,.28);margin:6px;user-select:none;
+  -webkit-app-region:drag}
+html[data-theme="light"] #bar{box-shadow:0 14px 34px rgba(20,25,40,.20),0 1px 3px rgba(20,25,40,.10)}
+.row{display:flex;align-items:center;gap:7px;padding:10px 11px}
+/* 整条都能拿来拖窗口：只有真正可点的控件才 no-drag */
+.ibtn,#inp,.go,.chip,.cx{-webkit-app-region:no-drag}
+.ibtn{width:30px;height:30px;flex:none;border-radius:8px;background:var(--ibtn);border:1px solid var(--ibtnbd);
+  color:var(--accent);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.ibtn:hover{filter:brightness(1.12)}
+.ibtn svg{display:block}
+#inp{flex:1;min-height:34px;max-height:96px;border-radius:8px;background:var(--inp);border:1px solid var(--inpbd);
+  color:var(--fg);font-size:12.5px;line-height:20px;padding:7px 11px;resize:none;outline:none;overflow-y:auto;
+  font-family:inherit}
+#inp::placeholder{color:var(--ph)}
+.go{width:30px;height:30px;flex:none;border-radius:8px;background:var(--accent);border:none;color:#fff;
+  display:flex;align-items:center;justify-content:center;cursor:pointer}
+.go[disabled]{opacity:.45;cursor:default}
+.chips{display:flex;gap:7px;flex-wrap:wrap;padding:10px 11px 0}
+.chips.hide{display:none}
+.chip{display:flex;align-items:center;gap:6px;height:34px;padding:0 8px 0 5px;border-radius:8px;
+  background:var(--chip);border:1px solid var(--chipbd);max-width:180px}
+.cthumb{width:40px;height:24px;border-radius:4px;object-fit:cover;flex:none;background:#2a3350}
+.cico{width:24px;height:24px;border-radius:4px;background:var(--cico);color:var(--cicoic);flex:none;
+  display:flex;align-items:center;justify-content:center}
+.cname{font-size:11.5px;color:var(--cname);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cx{border:none;background:transparent;color:var(--muted);font-size:13px;cursor:pointer;padding:0 2px}
+.ans{display:none;border-top:1px solid var(--sep);padding:12px 13px 10px;max-height:280px;overflow-y:auto;
+  -webkit-app-region:no-drag}
+.ans.on{display:block}
+.ans p{font-size:12.5px;line-height:1.72;color:var(--fg);white-space:pre-wrap;word-break:break-word;
+  user-select:text}
+.ans p .cur{color:var(--accent)}
+.foot{display:none;gap:14px;align-items:center;padding:8px 13px 10px;border-top:1px solid var(--sep);
+  font-size:11.5px;color:var(--muted);-webkit-app-region:no-drag}
+.foot.on{display:flex}
+.foot span{cursor:pointer}
+.foot .ml{margin-left:auto;cursor:default;color:var(--hint)}
+.hint{font-size:10.5px;color:var(--hint);text-align:center;padding:0 0 7px}
+.hint.hide{display:none}
+/* 滚动条跟应用一套（global.css 的 token 原值），别用 Chromium 默认那种粗灰条 */
+*{scrollbar-width:thin;scrollbar-color:var(--scth) transparent}
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:var(--scth);border-radius:6px;border:2px solid transparent;background-clip:content-box}
+*::-webkit-scrollbar-thumb:hover{background:var(--scthh);background-clip:content-box}
+</style></head>
+<body>
+<div id="bar">
+  <div class="chips hide" id="chips"></div>
+  <div class="row">
+    <button class="ibtn" id="file" title="附加文件">
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4.75 1.5h4L12.25 5V14.5a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1z"/><path d="M8.75 1.5v3.5h3.5"/></svg>
+    </button>
+    <button class="ibtn" id="snip" title="截图（框选屏幕）">
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5V3.5A1.5 1.5 0 0 1 3.5 2h2M10.5 2h2A1.5 1.5 0 0 1 14 3.5v2M14 10.5v2a1.5 1.5 0 0 1-1.5 1.5h-2M5.5 14h-2A1.5 1.5 0 0 1 2 12.5v-2"/><path d="M5.5 8h5"/></svg>
+    </button>
+    <textarea id="inp" rows="1" placeholder="问点什么…" aria-label="hub 输入框"></textarea>
+    <button class="go" id="send" title="发送" disabled>
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7l12-6-5 14-2-6z"/></svg>
+    </button>
+  </div>
+  <div class="ans" id="ans"><p id="ansText"></p></div>
+  <div class="foot" id="foot"><span id="copy">复制</span><span id="open">打开完整对话 ↗</span><span class="ml" id="model"></span></div>
+  <div class="hint" id="hint">Esc 关闭 · Enter 发送 · 失焦自动藏</div>
+</div>
+<input type="file" id="picker" multiple style="display:none">
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { images: [], chatId: "", streaming: false, text: "", model: "" };
+
+function baseName(p) { return String(p).split(/[\\/]/).pop() || p; }
+function isImage(p) { return /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(p); }
+/* Windows 路径要变成合法的 file URL：C:\\a\\b.png -> file:///C:/a/b.png
+   （之前直接 "file://"+path，出来是 file://C:%5C... 非法，缩略图必坏） */
+function toFileUrl(p) {
+  const s = String(p).replace(/\\/g, "/").replace(/#/g, "%23");
+  return s.startsWith("/") ? "file://" + encodeURI(s) : "file:///" + encodeURI(s);
+}
+
+function render() {
+  const chips = $("chips");
+  chips.classList.toggle("hide", state.images.length === 0);
+  chips.textContent = "";
+  state.images.forEach((p, i) => {
+    const el = document.createElement("span");
+    el.className = "chip";
+    if (isImage(p)) {
+      const img = document.createElement("img");
+      img.className = "cthumb"; img.src = toFileUrl(p);
+      el.appendChild(img);
+    } else {
+      const ic = document.createElement("span");
+      ic.className = "cico";
+      ic.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4.75 1.5h4L12.25 5V14.5a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1z"/><path d="M8.75 1.5v3.5h3.5"/></svg>';
+      el.appendChild(ic);
+    }
+    const nm = document.createElement("span"); nm.className = "cname"; nm.textContent = baseName(p);
+    nm.title = p;
+    const x = document.createElement("button"); x.className = "cx"; x.textContent = "×"; x.title = "移除";
+    x.onclick = () => { state.images.splice(i, 1); render(); };
+    el.appendChild(nm); el.appendChild(x);
+    chips.appendChild(el);
+  });
+  $("hint").classList.toggle("hide", state.streaming || state.images.length > 0);
+  $("send").disabled = state.streaming || (!state.text.trim() && state.images.length === 0);
+  requestAnimationFrame(() => window.hub.resize(Math.ceil(document.getElementById("bar").getBoundingClientRect().height) + 12));
+}
+
+function showAnswer(on) {
+  $("ans").classList.toggle("on", on);
+  $("foot").classList.toggle("on", on);
+}
+
+function appendDelta(t) {
+  const p = $("ansText");
+  p.textContent = (p.textContent || "") + t;
+  p.scrollTop = p.scrollHeight;
+  if (!$("ans").classList.contains("on")) showAnswer(true);
+  render();
+}
+
+async function send() {
+  const text = state.text.trim();
+  if (state.streaming || (!text && !state.images.length)) return;
+  state.streaming = true;
+  $("ansText").textContent = "";
+  showAnswer(true);
+  render();
+  const res = await window.hub.ask(text, state.images.slice());
+  state.chatId = (res && res.chatId) || "";
+  if (res && res.model) { state.model = res.model; $("model").textContent = res.model; }
+  state.images = [];
+  state.text = ""; $("inp").value = "";
+  render();
+}
+
+$("inp").addEventListener("input", (e) => { state.text = e.target.value; render(); });
+$("inp").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); }
+});
+$("send").onclick = () => void send();
+$("snip").onclick = () => void window.hub.snip();
+$("file").onclick = () => $("picker").click();
+$("picker").addEventListener("change", (e) => {
+  for (const f of Array.from(e.target.files || [])) {
+    const p = window.hub.pathOf(f);
+    if (p && !state.images.includes(p)) state.images.push(p);
+  }
+  e.target.value = "";
+  render();
+});
+$("copy").onclick = () => window.hub.copy($("ansText").textContent || "");
+$("open").onclick = () => window.hub.openInMain();
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.hub.hide(); });
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+  if (files.length && files[0].path === undefined) {
+    for (const f of files) { const p = window.hub.pathOf(f); if (p && !state.images.includes(p)) state.images.push(p); }
+    render();
+  }
+});
+document.addEventListener("paste", (e) => {
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []).filter((i) => i.kind === "file");
+  if (!items.length) return;
+  e.preventDefault();
+  (async () => {
+    for (const it of items) {
+      const f = it.getAsFile();
+      if (!f) continue;
+      const p = window.hub.pathOf(f);
+      if (p) { if (!state.images.includes(p)) state.images.push(p); }
+      else if (f.type.startsWith("image/")) {
+        const buf = await f.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const saved = await window.hub.saveTempImage("data:" + f.type + ";base64," + b64, "paste");
+        if (saved && !state.images.includes(saved)) state.images.push(saved);
+      }
+    }
+    render();
+  })();
+});
+
+window.hub.onEvent((payload) => {
+  const p = payload || {};
+  if (!state.chatId || p.chatId !== state.chatId) return;
+  const ev = p.event, d = p.data || {};
+  if (ev === "chat.delta" && typeof d.text === "string") appendDelta(d.text);
+  else if (ev === "chat.done" || ev === "chat.error") {
+    state.streaming = false;
+    if (ev === "chat.error" && !$("ansText").textContent) $("ansText").textContent = "出错了：" + (d.message || d.error || "未知错误");
+    render();
+  }
+});
+window.hub.onSnip((file) => { if (file && !state.images.includes(file)) { state.images.push(file); render(); } });
+window.hub.onShown(() => { $("inp").focus(); });
+(async () => { const t = await window.hub.theme(); document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark"); render(); })();
+</script>
+</body></html>

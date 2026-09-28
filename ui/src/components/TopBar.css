@@ -1,0 +1,211 @@
+.topbar {
+  flex: 0 0 auto;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 14px 0 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--grad-topbar);
+  /* The window is frameless: this bar *is* the title bar, so dragging it moves
+     the window (double-click maximises, as on native chrome). */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+/* ...but never drag from something the user wants to click. */
+.topbar button,
+.topbar input,
+.topbar .model-picker__menu,
+.topbar__stat {
+  -webkit-app-region: no-drag;
+}
+/* Windows-style caption buttons, drawn by the app. */
+.winbtns {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  margin-left: 2px;
+  margin-right: -14px;
+}
+.winbtn {
+  width: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+.winbtn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+.winbtn--close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+.topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+/* The app identity moved here when the decorative title bar was removed. */
+.topbar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border-subtle);
+}
+/* Brand mark: the robot glyph in Icon.tsx, tinted with the brand blue that the
+   user's icon asset uses (#1C7DF0). No plate or glow -- it is a glyph now. */
+.topbar__logo {
+  display: block;
+  flex: 0 0 auto;
+  color: #1C7DF0;
+}
+.topbar__brand-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-secondary);
+}
+.topbar__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.topbar__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  cursor: default;
+}
+.topbar__stat-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: 3px;
+  padding: 0 5px;
+}
+
+/* Model picker */
+.model-picker { position: relative; }
+.model-picker__btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 9px 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: border-color var(--motion-fast), background var(--motion-fast);
+}
+.model-picker__btn:hover { border-color: var(--border-strong); background: var(--bg-card); }
+.model-picker__btn.is-open { border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.model-picker__dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--semantic-success);
+  box-shadow: 0 0 0 3px rgba(16,185,129,0.14);
+  flex: 0 0 auto;
+}
+.model-picker__name {
+  color: var(--text-primary);
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-picker__model {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--bg-app);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.model-picker__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 268px;
+  padding: 5px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 40;
+  animation: modal-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.model-picker__menu-head {
+  padding: 7px 9px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.model-picker__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background var(--motion-fast);
+}
+.model-picker__item:hover { background: var(--bg-hover); }
+.model-picker__item.is-active { color: var(--accent); background: var(--accent-soft); }
+.model-picker__item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.model-picker__item-name { font-size: 12.5px; font-weight: 500; color: var(--text-primary); }
+.model-picker__item.is-active .model-picker__item-name { color: var(--accent-text); }
+.model-picker__item-model { font-size: 10.5px; color: var(--text-muted); }
+/* Prototype affordance: re-trigger the approval flow */
+.topbar__simulate {
+  color: var(--text-tertiary);
+  border-color: var(--border-default);
+  height: 28px;
+}
+.topbar__simulate:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.topbar__simulate svg { color: var(--semantic-warn); }
+
+/* A model whose env var is not set yet cannot be called - flag it, never the value. */
+.model-picker__dot.is-warn { background: #f59e0b; }
+.model-picker__item-warn { margin-left: 6px; font-size: 11px; color: var(--warn-text); }

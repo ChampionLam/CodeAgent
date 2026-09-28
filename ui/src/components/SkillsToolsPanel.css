@@ -1,0 +1,344 @@
+/* ── 技能与工具面板（居中弹窗） ─────────────────────────────────── */
+
+/* 遮罩：fixed 全屏，弹窗脱离文档流叠加在页面之上 —— 页面本体不增高。 */
+.skills-tools-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 14, 0.55);
+  backdrop-filter: blur(2px);
+  padding: 24px;
+}
+
+/* 面板：自身限高，超出部分仅在内部滚动区滚动。 */
+.skills-tools-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(80vh, 680px);
+  min-height: 220px;
+  background: var(--bg-panel, #1d1d22);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg, 10px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* 头部：标题 + 页签 + 关闭。 */
+.skills-tools-panel__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.skills-tools-panel__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.skills-tools-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skills-tools-panel__close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.skills-tools-panel__close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 页签。 */
+.skills-tools-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.skills-tools-tabs__btn {
+  padding: 4px 12px;
+  border-radius: calc(var(--radius-sm) - 1px);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.skills-tools-tabs__btn:hover {
+  color: var(--text-primary);
+}
+.skills-tools-tabs__btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* 搜索框（两个页签共用）。 */
+.skills-tools-panel__search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 16px 4px;
+  padding: 0 9px;
+  height: 30px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: border-color var(--motion-fast);
+}
+.skills-tools-panel__search:focus-within {
+  border-color: var(--border-strong);
+}
+.skills-tools-panel__search input {
+  flex: 1 1 auto;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  min-width: 0;
+}
+.skills-tools-panel__search input::placeholder {
+  color: var(--text-muted);
+}
+.skills-tools-panel__search-clear {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  color: var(--text-muted);
+}
+.skills-tools-panel__search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+/* 内部滚动区：面板本体不滚动，列表在这里滚。 */
+.skills-tools-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 16px 14px;
+}
+
+/* 提示文案（加载 / 为空 / 失败）。 */
+.skills-tools-note {
+  padding: 36px 16px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* 列表容器。 */
+.skills-tools-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── 工具行 ── */
+.skills-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  transition: background var(--motion-fast);
+}
+.skills-tool-row:hover {
+  background: var(--bg-hover);
+}
+.skills-tool-row__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.skills-tool-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.skills-tool-row__zh {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.skills-tool-row__slug {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  opacity: 0.75;
+  word-break: break-all;
+}
+.skills-tool-row__name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.skills-tool-row__desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 开关（复用全局 .switch 视觉，隐藏文字标签，仅留给读屏）。 */
+.skills-tool-row .switch {
+  display: block;
+  cursor: pointer;
+}
+.skills-tool-row .switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.switch__text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ── 技能行（只读） ── */
+.skills-skill-row {
+  padding: 10px 11px;
+  border-radius: var(--radius-md);
+  transition: background var(--motion-fast);
+}
+.skills-skill-row:hover {
+  background: var(--bg-hover);
+}
+.skills-skill-row__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.skills-skill-row__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 12.8px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.skills-skill-row__badge {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 3px;
+  padding: 1.5px 6px;
+}
+.skills-skill-row__desc {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+.skills-skill-row__when {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+.skills-skill-row__label {
+  margin-right: 6px;
+  color: var(--text-muted);
+}
+.skills-skill-row__meta {
+  margin: 5px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.skills-skill-row__dot {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.skills-skill-row__builtin-note {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* 加载失败的技能。 */
+.skills-tools-skipped {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.skills-tools-skipped__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.skills-tools-skipped ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.skills-tools-skipped li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+}
+.skills-tools-skipped__name {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.skills-tools-skipped__reason {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skills-tools-overlay,
+  .skills-tools-panel {
+    transition: none;
+  }
+}

@@ -1,0 +1,132 @@
+.toolCard {
+  margin: 10px 0 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: 13px;
+  transition: border-color var(--motion-base);
+}
+.toolCard:hover { border-color: var(--border-strong); }
+.toolCard[data-status="running"] { border-color: var(--border-focus); }
+.toolCard[data-status="failed"] { border-color: rgba(239,68,68,0.4); }
+.toolCard[data-status="rejected"] { border-color: rgba(245,158,11,0.4); }
+.toolCard[data-status="awaiting"] { border-color: rgba(245,158,11,0.4); }
+
+.toolHead {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: background var(--motion-fast);
+}
+.toolHead:hover { background: var(--bg-hover); }
+
+.toolIcon {
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.toolCard[data-status="running"] .toolIcon,
+.toolCard[data-status="awaiting"] .toolIcon {
+  color: var(--accent);
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+
+.toolName {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.toolSummary {
+  color: var(--text-secondary);
+  font-size: 13px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.statusPill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.statusPill[data-s="success"] { background: var(--semantic-success-soft); color: var(--semantic-success); }
+.statusPill[data-s="running"] { background: var(--accent-soft); color: var(--accent-hover); }
+.statusPill[data-s="awaiting"] { background: var(--semantic-warn-soft); color: var(--semantic-warn); }
+.statusPill[data-s="failed"] { background: var(--semantic-danger-soft); color: var(--semantic-danger); }
+.statusPill[data-s="rejected"] { background: var(--semantic-warn-soft); color: var(--semantic-warn); }
+
+.statusDot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.statusPill[data-s="running"] .statusDot { animation: pulse 1.2s ease-in-out infinite; }
+
+.expandIcon {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  transition: transform var(--motion-base);
+}
+.expandIcon.open { transform: rotate(90deg); }
+
+.toolBody {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  padding: 10px 12px 12px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.sectionLabel {
+  font-family: var(--font-stack);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-tertiary);
+  margin: 10px 0 4px;
+}
+.sectionLabel:first-child { margin-top: 0; }
+.kv { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; }
+.kv .k { color: var(--text-tertiary); }
+.kv .v { color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
+
+.code {
+  background: var(--bg-code);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: #c9c9d1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.diffAdd { color: #86efac; }
+.diffRem { color: #fca5a5; }

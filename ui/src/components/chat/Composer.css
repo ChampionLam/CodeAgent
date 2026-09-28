@@ -1,0 +1,258 @@
+.composer {
+  flex: 0 0 auto;
+  /* 跟对话窗同一套横向留白：--chat-gutter（chatarea__inner 用的就是这个），
+     所以输入框的左右边界永远跟消息列对齐。 */
+  padding: 8px var(--chat-gutter) 10px;
+  /* 对话窗那侧被滚动条占了 10px（chatarea 1160 / chatarea__inner 1150），
+     这边补回来，两边右边界才对得齐。 */
+  padding-right: calc(var(--chat-gutter) + 10px);
+  background: var(--fade-bottom);
+}
+.composer__inner {
+  /* 不再固定 780px：跟 chatarea__inner 一样全流式，窗口多宽就多宽 */
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.composer__box {
+  background: var(--composer-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--motion-base), box-shadow var(--motion-base), background var(--motion-base);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  overflow: visible;
+}
+.composer__box:hover { border-color: var(--border-strong); }
+.composer__box.is-focused {
+  border-color: rgba(99, 102, 241, 0.55);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.13), 0 4px 16px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: var(--composer-bg-focus);
+}
+.composer__box.is-busy { border-color: rgba(99, 102, 241, 0.3); }
+
+/* 附在图上面的图片条：仅在附了图时出现 */
+.composer__box.is-dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.16), 0 2px 10px rgba(0, 0, 0, 0.32);
+}
+
+/* 拖拽经过时的一句话提示（松手前告诉用户放下去会发生什么） */
+.composer__drop {
+  padding: 9px 13px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 拖进来但格式不认时的提示，3 秒自消失，不占常驻空间 */
+.composer__hint {
+  padding: 9px 13px 6px;
+  font-size: 12px;
+  color: var(--warn-text);
+}
+
+.composer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /* 13px = .composer__input 的 padding-left：chip 左边缘要和输入文字起点对齐
+     （2026-09-26 实测差 3px，用户指出「水平没对齐」）
+     2026-09-26 二修：底部原为 0 → chip 的下边缘正好压在输入区顶边（781 那条分界线）上，
+     用户报「文件这个框挡住输入框里面的线条了」。改成 9px（与顶部对称），让分界线露出来 */
+  padding: 9px 13px 9px;
+}
+.composer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 3px 4px 3px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.composer__chip-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex: none;
+}
+/* 非图片附件（日志/文档）的图标位：和缩略图同尺寸，chip 内基线才一致 */
+.composer__chip-icon > svg {
+  /* 文字墨迹中心比行盒中心低 1.5px（11.5px Segoe UI：上伸 12 / 下伸 3），
+     图标按盒子居中就会看着偏上 1px —— 用 em 跟着字号下沉，换字号也成立 */
+  transform: translateY(0.13em);
+}
+.composer__chip-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+.composer__chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__chip-x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+.composer__chip-x:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.composer__input {
+  display: block;
+  width: 100%;
+  /* 2026-09-26 用户要求「就是要居中」。
+     原来 11px 上 / 4px 下：输入框 781..817 几何中心 799，而占位文字墨迹 796.5..810.5
+     中心 803.5 —— 低了 4.5px，看着贴下边（上留白 15.5px / 下留白 6.5px）。
+     注意不能简单改对称 7.5/7.5：行盒（line-height 21px）居中后，中文 ink 在行盒里天然
+     还要低 1.0px（实测：行盒中心 802.5 vs 墨迹中心 803.5），字还是偏低 1px。
+     所以按「墨迹中心落在 799」倒推：行盒要 787.5..808.5 → padding-top 6.5 / bottom 8.5。
+     上下合计仍是 15px，输入框高 36px 不变，多行增长也一致。 */
+  padding: 6.5px 13px 8.5px;
+  font-size: 13.6px;
+  line-height: 21px;
+  color: var(--text-primary);
+  resize: none;
+  max-height: 188px;
+  overflow-y: auto;
+  background: transparent;
+  /* textarea 自己是直角的：它在 Chromium 里的选区/聚焦高亮画的是自己的方框，
+     外框是 10px 圆角、里面 0px，一旦选中或高亮就会露出直角。
+     继承外框圆角 + 去掉原生 outline，保证「要么全圆角要么全直角」里的全圆角。 */
+  border-radius: inherit;
+  outline: none;
+}
+.composer__input::placeholder { color: var(--text-muted); }
+
+/* 输入框底部那一行：左=工具图标，中=模型/思考控制，右=回车提示 + 发送 */
+.composer__bar {
+  display: flex;
+  align-items: center;
+  /* 不再 space-between：那样模型会飘在正中间。工具靠左，模型+发送靠右。 */
+  justify-content: flex-start;
+  gap: 10px;
+  /* 左右两条线都跟输入文字对齐（2026-09-26 实测）：
+     左边 —— 图标字形距按钮左边缘 = (28-15)/2 + 2.11(路径内边距) ≈ 8.6px，
+     文字起点在 13px，所以 padding-left = 13 - 8.6 ≈ 5px（原 9px，字形偏右 2.5px）；
+     右边 —— 发送键右边缘要落在文字的右线 13px 上（原 7px，偏右 6px）。 */
+  /* 上下也要对称（2026-09-26 实测）：原来上 5 / 下 7 是给「文字墨迹偏下」做的补偿，
+     结果整行内容（左图标 + 模型名 + 状态点 + 箭头 + 发送键）的框中心全落在 837，
+     而 bar 自身中心是 838 —— 整体看着偏上 1px（用户口径「明显图标偏上」）。
+     改成 6/6：bar 高度不变（5+30+7 = 42 = 6+30+6），内容回到容器中心，
+     行内「文字墨迹 ↔ 图标墨迹」的相对对齐不受影响（一起下移 1px）。 */
+  padding: 6px 13px 6px 5px;
+}
+
+.composer__tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.composer__icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.composer__icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.composer__actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+/* 回车提示。注意：.composer__hint 这个名字已经被上面「拖入格式不对」那条告示占了，
+   两块规则同名会互相污染（告示被吃成 10.5px inline-flex 就是撞出来的）——
+   所以这里用 .composer__keyhint，两边各归各的。 */
+.composer__keyhint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.composer__keyhint kbd {
+  font-family: inherit;
+  font-size: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  padding: 0.5px 4px;
+  color: var(--text-tertiary);
+}
+
+.composer__send,
+.composer__stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 图标按钮：方一点、圆角，不要文字也撑得住 */
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  transition: background var(--motion-fast), opacity var(--motion-fast), box-shadow var(--motion-fast);
+}
+.composer__send {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.composer__send:hover:not(:disabled) { background: var(--accent-hover); }
+.composer__send:disabled { background: var(--bg-active); color: var(--text-muted); box-shadow: none; opacity: 1; }
+
+/* 2026-09-26 用户选 A：按「轮廓（墨迹包围盒）」居中，不补偿亮度重心。
+   纸飞机是描边图标（Icon.base: fill none / stroke 1.5 / viewBox 0 0 16 16，size 15
+   → 缩放 15/16）。路径 M2 7l12-6-5 14-2-6z 的 bbox x2..14 y1..15，中心正是栅格中心
+   (8,8)，描边 ±0.75 四边对称 —— 即图标在自身盒里已居中；svg 盒又被 flex 居中在
+   30×30 按钮里，所以「墨迹包围盒中心 = 按钮中心」。
+   早前为迁就亮度重心加过 translateY(0.5px)，实拍复核代价是轮廓低 0.5px
+   （墨迹带中心 838.5 vs 按钮/行中心 838），且横向墨迹中心 1369.33 本来就与按钮中心重合。
+   用户放大截图判的是轮廓，故撤销该补偿：轮廓回到 838.0.（原先按「10.0 偏 1.0px」
+   的说法源于把 viewBox 误当 15×15，已作废。）
+   保留事实：该字形质量天然偏在包围盒上方（亮度重心 837.41，−0.59），是字形分布，不再补偿。 */
+
+.composer__stop {
+  background: var(--semantic-danger-soft);
+  color: var(--semantic-danger);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.composer__stop:hover { background: rgba(239, 68, 68, 0.18); }
+
+/* 自适应：跟对话窗走的同一套——窄了按容器（不是窗口）收，宽了多给点呼吸。 */
+@container workspace (max-width: 880px) {
+  .composer { padding: 6px 24px 8px 14px; }
+  .composer__keyhint { display: none; }
+  .composer__bar { flex-wrap: wrap; row-gap: 3px; }
+  /* 控制条整条落到工具图标下面一行，不去和发送按钮抢位置 */
+  .cctl-row { order: 3; flex: 1 1 100%; justify-content: flex-end; }
+  .composer__actions { margin-left: auto; }
+}
+@container workspace (min-width: 1500px) {
+  .composer { padding: 10px var(--chat-gutter) 12px; padding-right: calc(var(--chat-gutter) + 10px); }
+}
+@media (max-width: 1180px) {
+  .cctl__btn { max-width: 210px; }
+}

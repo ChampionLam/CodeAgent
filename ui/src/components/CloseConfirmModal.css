@@ -1,0 +1,62 @@
+.closemodal__mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.closemodal {
+  width: 380px;
+  padding: 16px 18px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line, #333);
+  background: var(--panel, #1b1b1e);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+
+.closemodal__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, var(--text-primary));
+  margin-bottom: 6px;
+}
+
+.closemodal__body {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dim, #a0a0a8);
+  margin-bottom: 14px;
+}
+
+.closemodal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.closemodal__btn {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line, #333);
+  background: transparent;
+  color: var(--text, var(--text-primary));
+  cursor: pointer;
+}
+
+.closemodal__btn--danger {
+  border-color: #b4544c;
+  color: var(--danger-text);
+}
+
+.closemodal__btn--ghost {
+  color: var(--dim, var(--text-tertiary));
+}
+
+.closemodal__btn:hover {
+  filter: brightness(1.2);
+}

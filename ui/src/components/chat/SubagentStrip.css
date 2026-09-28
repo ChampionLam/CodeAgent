@@ -1,0 +1,93 @@
+/* ── 子代理进度条（输入区上方，跟 ResumeBar 同一位置家族） ─────────────
+   常驻行极简：只有一行「子代理 N 个 · 进行中 x/N」，点开才逐节点列。
+   跑完不自动消失：留着最后一批的结果，下一次派活会被新批次替换。 */
+
+.substrip {
+  flex: 0 0 auto;
+  /* 宽度跟输入框对齐（2026-09-26 用户看截图纠正）：
+     左边 = gutter，右边 = gutter + 10px —— 跟 .composer 的 padding 完全一致，
+     否则右边会比输入框宽 10px（实测 1408 vs 1398）。 */
+  margin: 0 calc(var(--chat-gutter) + 10px) 6px var(--chat-gutter);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-panel, #1d1d22);
+  overflow: hidden;
+}
+
+.substrip__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.substrip__head:hover { background: var(--bg-hover); }
+
+.substrip__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+}
+
+/* 窄窗口下跟 .composer 同步收边（同一条 container query 口径）。 */
+@container workspace (max-width: 880px) {
+  .substrip { margin: 0 24px 6px 14px; }
+}
+
+/* 运行中：一个小转圈（跟工具卡片的 spin 同口径）。 */
+.substrip.is-live .substrip__glyph { color: var(--accent); }
+.substrip__spin {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: substrip-spin 0.8s linear infinite;
+}
+@keyframes substrip-spin { to { transform: rotate(360deg); } }
+
+.substrip__summary { flex: 1 1 auto; min-width: 0; }
+.substrip__mem { font-size: 11px; color: var(--text-tertiary); }
+.substrip__chevron {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform var(--motion-fast, 120ms);
+}
+.substrip__chevron.is-open { transform: rotate(180deg); }
+
+.substrip__nodes {
+  margin: 0;
+  padding: 2px 10px 8px;
+  list-style: none;
+  border-top: 1px solid var(--border-subtle);
+}
+.substrip__node {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.substrip__id { color: var(--text-secondary); flex: 0 0 auto; }
+.substrip__state { flex: 0 0 auto; }
+.substrip__node.is-done .substrip__state { color: var(--text-secondary); }
+.substrip__node.is-failed .substrip__state { color: var(--danger, #e5534b); }
+.substrip__tool { flex: 0 0 auto; color: var(--text-secondary); }
+.substrip__dur { flex: 0 0 auto; }
+.substrip__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

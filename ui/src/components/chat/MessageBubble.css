@@ -1,0 +1,414 @@
+/* ── Messages ───────────────────────────────────────────────────── */
+.msg {
+  padding: 3px 0;
+  position: relative;
+}
+
+/* User */
+.msg--user .msg__row {
+  display: flex;
+  justify-content: flex-end;
+}
+.msg__user-wrap {
+  /* Wider column should not turn short messages into full-width banners. */
+  max-width: min(76%, 900px);
+}
+.msg__user-bubble {
+  padding: 10px 14px;
+  background: var(--user-bubble-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  border-top-right-radius: 3px;
+  font-size: var(--chat-font-size, 13.6px);
+  line-height: 1.65;
+  color: var(--text-primary);
+  word-break: break-word;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.035);
+}
+
+/* Assistant */
+.msg--assistant .msg__row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.msg__avatar {
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  margin-top: 1px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--accent-text);
+  background: linear-gradient(150deg, rgba(124,127,245,0.28) 0%, rgba(99,102,241,0.14) 100%);
+  border: 1px solid rgba(99,102,241,0.32);
+  box-shadow: 0 0 0 1px rgba(99,102,241,0.06), 0 2px 6px rgba(0,0,0,0.3);
+}
+.msg--assistant.is-streaming .msg__avatar {
+  box-shadow: 0 0 0 1px rgba(99,102,241,0.16), 0 0 14px rgba(99,102,241,0.28);
+}
+.msg__content {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+/* System */
+.msg--system {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0;
+}
+.msg__system-pill {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 3px 12px;
+}
+
+/* Action bar — appears on hover */
+.msg__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity var(--motion-base);
+  pointer-events: none;
+}
+.msg:hover .msg__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msg__actions--left { padding-left: 40px; }
+.msg__actions--right { justify-content: flex-end; padding-right: 4px; }
+
+.msg__time {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+.msg__tokens {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-default);
+}
+.msg__action {
+  display: grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.msg__action:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── Chat area ──────────────────────────────────────────────────── */
+.chatarea-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chatarea {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* NOT scroll-behavior: smooth. The follow scroll fires on every stream chunk, so
+     a smooth scroll restarted per chunk kept the whole pane sliding and never
+     settling - that was the flicker. Scrolling is instant here; only the
+     jump-to-bottom button animates. */
+  scroll-behavior: auto;
+  /* Scroll anchoring would also adjust scrollTop as content grows and fight the
+     follow scroll. This pane is driven explicitly. */
+  overflow-anchor: none;
+}
+.chatarea__inner {
+  /* Fully fluid: the column follows the pane at any size. Line-length comfort
+     is handled inside the content blocks, not by freezing the column. */
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 22px var(--chat-gutter) 26px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The pane decides, not the window: narrow pane gets tighter type/tables. */
+@container workspace (max-width: 880px) {
+  .chatarea__inner { padding: 18px 14px 20px; }
+  .md table { font-size: 12.4px; }
+  .md pre { font-size: 12.2px; }
+  .msg__images { justify-content: flex-start; }
+}
+@container workspace (min-width: 1500px) {
+  .chatarea__inner { padding: 26px var(--chat-gutter) 34px; }
+}
+
+/* Attached images on a user message */
+.msg__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.msg__image {
+  max-width: 220px;
+  max-height: 160px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  object-fit: cover;
+}
+/* 非图片附件在气泡里画成文件条：老版本这里也是 <img> + onError 隐藏，
+   结果拖进来的日志/文档在气泡里彻底看不见（只剩消息体那句「N 张图片」）。 */
+.msg__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.msg__file > svg {
+  /* 同 composer__chip-icon：让图标墨迹和文字墨迹落在同一条水平线上 */
+  transform: translateY(0.13em);
+}
+.msg__file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Day divider */
+.chatarea__daybar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 20px;
+}
+.chatarea__daybar::before,
+.chatarea__daybar::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border-subtle);
+}
+.chatarea__daybar span {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+/* Streaming status pill above the input */
+.chatarea__streaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  margin: 6px 0 0 40px;
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  border: 1px solid rgba(99,102,241,0.24);
+  font-size: 11.5px;
+  color: var(--accent-text);
+}
+
+/* Kept in the flow when idle so the pane does not shrink by a row the moment an
+   answer finishes (that shrinking popped the content up ~28px). */
+.chatarea__streaming--idle {
+  visibility: hidden;
+}
+.chatarea__streaming--idle .toolcard__spin {
+  animation: none;
+}
+
+/* Jump-to-bottom — floats over the scroll area, never in the scroll flow */
+.chatarea__jump {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  z-index: 6;
+  animation: backdrop-in 140ms ease-out;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.chatarea__jump:hover { background: var(--bg-active); color: var(--text-primary); }
+
+/* Empty state */
+.chatarea__empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 30px;
+  text-align: center;
+  gap: 6px;
+}
+.chatarea__empty-mark {
+  width: 52px; height: 52px;
+  border-radius: var(--radius-xl);
+  display: grid;
+  place-items: center;
+  color: var(--accent-text);
+  background: linear-gradient(150deg, rgba(124,127,245,0.24) 0%, rgba(99,102,241,0.1) 100%);
+  border: 1px solid rgba(99,102,241,0.3);
+  margin-bottom: 12px;
+}
+.chatarea__empty-title {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.chatarea__empty-desc {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  max-width: 62ch;
+  line-height: 1.65;
+}
+.chatarea__suggestions {
+  display: grid;
+  /* Grows with the pane instead of sitting at a fixed 520px island. */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  margin-top: 22px;
+  width: 100%;
+  max-width: min(100%, 760px);
+}
+.chatarea__suggestion {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 13px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+.chatarea__suggestion:hover {
+  background: var(--bg-card);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.chatarea__suggestion svg { flex: 0 0 auto; color: var(--accent); }
+
+/* Reasoning channel (chat.reasoning): collapsed by default. While the model is
+   thinking there is no answer text yet, so this is the only live feedback. */
+.msg__thinking {
+  margin: 0 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 6px 10px;
+}
+.msg__thinking.is-live { border-color: var(--accent, #6366f1); }
+/* 「隐藏正文」模式：只留一行生成指示（模型思考时没有正文，不能连指示都没有） */
+.msg__thinking--live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+}
+.msg__thinking-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.msg__thinking-head::-webkit-details-marker { display: none; }
+.msg__thinking.is-live .msg__thinking-head { color: var(--accent, #6366f1); }
+.msg__thinking-body {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* ── 对话里的文件附件（2026-09-27）──────────────────────────────── */
+.msg__artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.afile {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 420px;
+  padding: 7px 8px 7px 7px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  transition: border-color var(--motion-fast);
+}
+.afile:hover { border-color: var(--border-strong); }
+.afile__thumb {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+.afile__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.afile__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.afile__name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.afile__meta { font-size: 10.5px; color: var(--text-muted); }
+.afile__actions { display: flex; align-items: center; gap: 2px; margin-left: 4px; }
+.afile__act {
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.afile__act:hover { background: var(--bg-hover); color: var(--text-primary); }

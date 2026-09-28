@@ -1,0 +1,100 @@
+.mermaid-block {
+  margin: 12px 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.014);
+  overflow: hidden;
+}
+
+.mermaid-block__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mermaid-block__label {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.mermaid-block__toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mermaid-block__toggle button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2.5px 10px;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.mermaid-block__toggle button:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mermaid-block__toggle button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.mermaid-block__stage {
+  padding: 12px;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+
+.mermaid-block__stage svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-block__hint {
+  padding: 4px 10px 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* While rendering (streaming chunks) show a quiet placeholder. */
+.mermaid-block__stage:empty::after {
+  content: '渲染中…';
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* 导出按钮：跟预览/源码开关同一套观感 */
+.mermaid-block__acts {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 10px;
+}
+
+.mermaid-block__act {
+  appearance: none;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2.5px 9px;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.mermaid-block__act:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}

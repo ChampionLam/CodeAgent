@@ -1,0 +1,9 @@
+-- 002_permissions.sql
+-- Placeholder: intentionally empty.
+--
+-- Reason: the permission_rules / audit_log tables from the design doc are
+-- already owned by the audit store (python/audit.py -> audit.db, tables
+-- permission_rules + audit_log). This round deliberately does not merge the
+-- two databases, so sessions.db does not create duplicate permission tables.
+-- If permission rules ever move into sessions.db, put their DDL here and
+-- raise SCHEMA ceiling in sessionstore.py accordingly.

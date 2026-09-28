@@ -1,0 +1,2644 @@
+{
+ "version": 1,
+ "note": "预置模型目录：窗口/思考参数/深度/价格。evidence.status: exact=逐字命中官方页，normalized=去掉 markdown 记号后命中，unverified=没在页面上找到（该条不要当依据）。",
+ "models": [
+  {
+   "provider": "anthropic",
+   "model": "claude-fable-5-1",
+   "label": "Claude Fable 5.1",
+   "contextWindow": 1000000,
+   "maxOutput": 128000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "thinking": {
+      "type": "adaptive"
+     }
+    },
+    "off": null,
+    "default": "不传 thinking 时思考已开启（Always on），深度由 effort 控制，默认 effort=high。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "output_config.effort",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 10.0,
+    "outputPerM": 50.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "输入 $10 / 输出 $50 /MTok；5m cache write $12.50、1h cache write $20、cache read $0.25（=2.5% 输入价）；Batch 5 折。thinking token 按输出计费。"
+   },
+   "strengths": [
+    "最强推理",
+    "长时程 agentic",
+    "高价位旗舰"
+   ],
+   "unverified": [
+    "evidence#0 未逐字核到（not_on_page）：窗口/输出/价格",
+    "evidence#3 未逐字核到（not_on_page）：模型总表（enabled/disabled 双拒）",
+    "evidence#4 未逐字核到（not_on_page）：effort 全档位"
+   ],
+   "evidence": [
+    {
+     "claim": "窗口/输出/价格",
+     "url": "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+     "quote": "Model ID: `claude-fable-5-1`\n\nContext window: 1M tokens · Max output: 128K tokens · Input pricing: $10 / MTok · Output pricing: $50 / MTok",
+     "status": "unverified"
+    },
+    {
+     "claim": "思考常开 + 默认 effort",
+     "url": "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+     "quote": "in one sentence.\"}], ) ``` Claude Opus 5 also has thinking on by default and accepts `thinking: {type: \"disabled\"}` at [effort](https://platform.claude.com/docs/en/build-with-claude/e",
+     "status": "unverified"
+    },
+    {
+     "claim": "拒绝 disabled",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+     "quote": "Claude Fable 5.1, Claude Mythos 5.1, Claude Fable 5, Claude Mythos 5, and Claude Mythos Preview reject `thinking: {type: \"disabled\"}`. Thinking can't be turned off on these models.",
+     "status": "unverified"
+    },
+    {
+     "claim": "模型总表（enabled/disabled 双拒）",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting",
+     "quote": "| Claude Fable 5.1      | Adaptive only                    | Always on | `\"enabled\"`, `\"disabled\"`  |",
+     "status": "unverified"
+    },
+    {
+     "claim": "effort 全档位",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/effort",
+     "quote": "Claude Fable 5.1 supports all five effort levels. **Start with `high`, the default.**",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "anthropic",
+   "model": "claude-haiku-4-5",
+   "label": "Claude Haiku 4.5",
+   "contextWindow": 200000,
+   "maxOutput": 64000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "thinking": {
+      "type": "enabled",
+      "budget_tokens": 16384
+     }
+    },
+    "off": null,
+    "default": "不传 thinking 时思考关闭（Haiku 4.5 在模型总表中 Default 为 Off；开启需显式 thinking:{type:\"enabled\",budget_tokens:N}）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "thinking.budget_tokens（最小 1,024，需小于 max_tokens）",
+    "levels": [
+     "1024-32768（数值区间，非档位）"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 1.0,
+    "outputPerM": 5.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "输入 $1 / 输出 $5 /MTok；cache read 0.1x 输入价；Batch 5 折。thinking token 按输出计费。"
+   },
+   "strengths": [
+    "最快",
+    "近前沿智能",
+    "低价"
+   ],
+   "unverified": [
+    "depthLevels：budget_tokens 是连续数值（1,024..max_tokens-1）而非离散档位，此处以区间描述",
+    "evidence#0 未逐字核到（not_on_page）：窗口/输出/价格/思考模式",
+    "evidence#1 未逐字核到（not_on_page）：模型总表行（Haiku 4.5 = Extended only / Off）",
+    "evidence#2 未逐字核到（not_on_page）：extended thinking 调用式",
+    "evidence#3 未逐字核到（not_on_page）：budget 规则",
+    "evidence#4 未逐字核到（not_on_page）：总表价格行",
+    "evidence#5 未逐字核到（not_on_page）：总表上下文/输出"
+   ],
+   "evidence": [
+    {
+     "claim": "窗口/输出/价格/思考模式",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+     "quote": "| Claude API ID | claude-fable-5-1 | claude-opus-5-5 | claude-sonnet-5 | claude-haiku-4-5-20251001 |",
+     "status": "unverified"
+    },
+    {
+     "claim": "模型总表行（Haiku 4.5 = Extended only / Off）",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting",
+     "quote": "| Claude Haiku 4.5      | Extended only                    | Off       | `\"adaptive\"`               |",
+     "status": "unverified"
+    },
+    {
+     "claim": "extended thinking 调用式",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+     "quote": "To turn on manual extended thinking, add a `thinking` object with `type` set to `enabled` and a `budget_tokens` value.\n\nThe `budget_tokens` parameter sets a target for how many tokens Claude can use for its internal reasoning process.",
+     "status": "unverified"
+    },
+    {
+     "claim": "budget 规则",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+     "quote": "* **Minimum of 1,024 tokens.** The API rejects smaller values.\n* **Less than `max_tokens`.** Thinking tokens count toward the `max_tokens` limit for the turn, so the budget must leave room for the final response.",
+     "status": "unverified"
+    },
+    {
+     "claim": "总表价格行",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+     "quote": "| Pricing | $10 / input MTok$50 / output MTok | $4 / input MTok$20 / output MTok | $2 / input MTok$10 / output MTok | $1 / input MTok$5 / output MTok |",
+     "status": "unverified"
+    },
+    {
+     "claim": "总表上下文/输出",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+     "quote": "| Context window | 1M tokens | 1M tokens | 1M tokens | 200K tokens |\n| Max output | 128K tokens | 128K tokens | 128K tokens | 64K tokens |",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "anthropic",
+   "model": "claude-opus-5-5",
+   "label": "Claude Opus 5.5",
+   "contextWindow": 1000000,
+   "maxOutput": 128000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "thinking": {
+      "type": "adaptive"
+     }
+    },
+    "off": null,
+    "default": "不传 thinking 时思考已开启（Opus 5.5 属『Adaptive (always on)』模型），深度由 effort 控制，默认 effort=medium。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "output_config.effort",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 4.0,
+    "outputPerM": 20.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "输入 $4 / 输出 $20 /MTok；5m cache write $5、1h cache write $8、cache read $0.20（=5% 输入价）；Batch 5 折。thinking token 按输出 token 计费（『the tokens Claude spends reasoning are billed as output tokens』）。Batches API 加 beta 头可到 300k 输出。"
+   },
+   "strengths": [
+    "长时程 agentic 编码",
+    "知识工作",
+    "默认档均衡"
+   ],
+   "unverified": [
+    "evidence#0 未逐字核到（partial_match）：思考常开不可关",
+    "evidence#1 未逐字核到（not_on_page）：窗口/输出/价格/默认 effort",
+    "evidence#2 未逐字核到（partial_match）：Capabilities 表",
+    "evidence#4 未逐字核到（not_on_page）：effort 档位与默认",
+    "evidence#6 未逐字核到（partial_match）：extended thinking 式样（4.6 及更早）"
+   ],
+   "evidence": [
+    {
+     "claim": "思考常开不可关",
+     "url": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+     "quote": "* Adaptive thinking is always on and can't be turned off. Control thinking depth with the [effort parameter](https://platform.claude.com/docs/en/build-with-claude/effort).",
+     "status": "unverified"
+    },
+    {
+     "claim": "窗口/输出/价格/默认 effort",
+     "url": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $4 / MTok · Output pricing: $20 / MTok",
+     "status": "unverified"
+    },
+    {
+     "claim": "Capabilities 表",
+     "url": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+     "quote": "| [Context window](https://platform.claude.com/docs/en/build-with-claude/context-windows)                                     | 1M tokens              |\n| Max output                                                                                                                  | 128K tokens            |\n| [Max output (Batch API, beta)](https://platform.claude.com/docs/en/build-with-claude/batch-processing#extended-output-beta) | 300K tokens            |\n| [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)                                                  | Adaptive (always on)   |\n| [Default effort](https://platform.claude.com/docs/en/build-with-claude/effort)                                              | `medium`               |",
+     "status": "unverified"
+    },
+    {
+     "claim": "thinking token 计费",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+     "quote": "Thinking has a cost: the tokens Claude spends reasoning are billed as output tokens, even when the thinking text isn't returned to you, and they count toward `max_tokens` alongside the response text.",
+     "status": "unverified"
+    },
+    {
+     "claim": "effort 档位与默认",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/effort",
+     "quote": "By default, Claude uses high effort, spending as many tokens as needed for excellent results. You can raise the effort level to `max` for the absolute highest capability, or lower it to be more conservative with token usage, optimizing for speed and cost while accepting some reduction in capability.",
+     "status": "unverified"
+    },
+    {
+     "claim": "effort 枚举全集",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/effort",
+     "quote": "n-empty text. For general streaming mechanics, see [Streaming Messages](https://platform.claude.com/docs/en/build-with-claude/streaming). ## Thinking and effort The `thi",
+     "status": "unverified"
+    },
+    {
+     "claim": "extended thinking 式样（4.6 及更早）",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+     "quote": "curl https://api.anthropic.com/v1/messages \\\n  -H \"x-api-key: $ANTHROPIC_API_KEY\" \\\n  -H \"anthropic-version: 2023-06-01\" \\\n  -H \"content-type: application/json\" \\\n  -d '{\n    \"model\": \"claude-sonnet-4-6\",\n    \"max_tokens\": 16000,\n    \"thinking\": {\n      \"type\": \"enabled\",\n      \"budget_tokens\": 10000\n    },",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "label": "Claude Sonnet 5",
+   "contextWindow": 1000000,
+   "maxOutput": 128000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "thinking": {
+      "type": "adaptive"
+     }
+    },
+    "off": {
+     "thinking": {
+      "type": "disabled"
+     }
+    },
+    "default": "不传 thinking 时自适应思考默认开启（Sonnet 5 属『Adaptive』且『On』：『adaptive thinking is on by default』），深度由 effort 控制，默认 effort=high。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "output_config.effort",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 10.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "输入 $2 / 输出 $10 /MTok；5m cache write $2.50、1h cache write $4、cache read $0.20；Batch 5 折。thinking token 按输出计费。注意：temperature/top_p/top_k 设非默认值会 400。"
+   },
+   "strengths": [
+    "速度与智能均衡",
+    "默认可关思考",
+    "1M 窗口"
+   ],
+   "unverified": [
+    "evidence#0 未逐字核到（partial_match）：默认开思考 + 手动档被拒",
+    "evidence#1 未逐字核到（not_on_page）：关思考（disabled）",
+    "evidence#2 未逐字核到（not_on_page）：窗口/输出/价格/默认 effort",
+    "evidence#4 未逐字核到（not_on_page）：模型总表（思考与 disabled 支持）",
+    "evidence#5 未逐字核到（not_on_page）：effort 默认"
+   ],
+   "evidence": [
+    {
+     "claim": "默认开思考 + 手动档被拒",
+     "url": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+     "quote": "Claude Sonnet 5 is the next generation of Anthropic's Sonnet model family. It is a drop-in upgrade for Claude Sonnet 4.6 with three behavior changes: [adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) is on by default, manual extended thinking now returns a 400 error (it was deprecated on Claude Sonnet 4.6), and setting sampling parameters (`temperature`, `top_p`, `top_k`) to non-default values returns a 400 error.",
+     "status": "unverified"
+    },
+    {
+     "claim": "关思考（disabled）",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+     "quote": "curl https://api.anthropic.com/v1/messages \\\n  -H \"x-api-key: $ANTHROPIC_API_KEY\" \\\n  -H \"anthropic-version: 2023-06-01\" \\\n  -H \"content-type: application/json\" \\\n  -d '{\n    \"model\": \"claude-sonnet-5\",\n    \"max_tokens\": 4096,\n    \"thinking\": {\"type\": \"disabled\"},",
+     "status": "unverified"
+    },
+    {
+     "claim": "窗口/输出/价格/默认 effort",
+     "url": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+     "quote": "Context window: 1M tokens · Max output: 128K tokens · Input pricing: $2 / MTok · Output pricing: $10 / MTok",
+     "status": "unverified"
+    },
+    {
+     "claim": "Capabilities 表",
+     "url": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+     "quote": "in one sentence.\"}], ) ``` Claude Opus 5 also has thinking on by default and accepts `thinking: {type: \"disabled\"}` at [effort](https://platform.claude.com/docs/en/build-with-claude/e",
+     "status": "unverified"
+    },
+    {
+     "claim": "模型总表（思考与 disabled 支持）",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting",
+     "quote": "| Claude Sonnet 5       | Adaptive only                    | On        | `\"enabled\"`                |",
+     "status": "unverified"
+    },
+    {
+     "claim": "effort 默认",
+     "url": "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+     "quote": "* Effort defaults to `high` on the Claude API and Claude Code.",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "dashscope-bailian",
+   "model": "qwen3.7-max",
+   "label": "千问 qwen3.7-max（纯文本旗舰）",
+   "contextWindow": 1000000,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "\"enable_thinking\": true",
+    "off": "\"enable_thinking\": false",
+    "default": "Qwen3.7 Max 系列为混合思考模式，thinking enabled by default"
+   },
+   "depth": {
+    "supported": true,
+    "param": "thinking_budget: 128~262144；Qwen3.7 未列 reasoning_effort 档位（档位参数仅列 DeepSeek/GLM/K3 与 qwen3.8）",
+    "levels": [
+     "thinking_budget 0~4096→low",
+     "4097~16384→medium",
+     "16385~262144→xhigh"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 12.0,
+    "outputPerM": 36.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "华北2（北京）原价：输入 12元/M、输出 36元/M；缓存命中 2.4元/M；Batch File 半价。上下文 1M、输出 131072、思维链 262144。"
+   },
+   "strengths": [
+    "推理",
+    "Agent",
+    "长上下文",
+    "纯文本"
+   ],
+   "unverified": [
+    "evidence#1 未逐字核到（not_on_page）：价格输入 12 / 输出 36"
+   ],
+   "evidence": [
+    {
+     "claim": "qwen3.7-max 上下文 1M、输出 131072、思维链 262144",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+     "quote": "上下文长度\n\n  1000000\n\n  最大输入长度（思考模式下）\n\n  983616",
+     "status": "exact"
+    },
+    {
+     "claim": "价格输入 12 / 输出 36",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+     "quote": "| 输入 | 12 | 每百万tokens |",
+     "status": "normalized"
+    },
+    {
+     "claim": "Qwen3.7 Max 混合思考默认开启（英文文档）",
+     "url": "https://help.aliyun.com/en/model-studio/deep-thinking",
+     "quote": "Qwen3.7 Max series (hybrid thinking mode, thinking enabled by default )",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "dashscope-bailian",
+   "model": "qwen3.7-plus",
+   "label": "千问 qwen3.7-plus（性价比）",
+   "contextWindow": 1000000,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "\"enable_thinking\": true",
+    "off": "\"enable_thinking\": false",
+    "default": "Qwen3.7 系列属混合思考模型，可用 enable_thinking 控制；百炼 qwen3.7-plus 默认开启思考"
+   },
+   "depth": {
+    "supported": true,
+    "param": "thinking_budget: 128~262144（Qwen3.7 系列思维链长度上限 262144）；另有 reasoning_effort（GLM/DeepSeek/K3 侧的档位参数，Qwen3.7 未列档位）",
+    "levels": [
+     "thinking_budget 0~4096→low",
+     "4097~16384→medium",
+     "16385~262144→xhigh"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 8.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "华北2（北京）阶梯价：输入<=256k 时输入 2元/输出 8元；256k<输入<=1m 时输入 6元/输出 24元；缓存命中 0.4元/0.4元(≥256k 未取到)。Batch File 半价。上下文 1M、输出 131072、思维链 262144。"
+   },
+   "strengths": [
+    "性价比",
+    "多模态",
+    "编程"
+   ],
+   "unverified": [
+    "evidence#1 未逐字核到（not_on_page）：输入<=256k 阶梯价 2/8 元",
+    "evidence#3 未逐字核到（not_on_page）：256k<输入<=1m 阶梯价 6/24 元"
+   ],
+   "evidence": [
+    {
+     "claim": "qwen3.7-plus 上下文 1M、最大输出 131072、思维链 262144",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+     "quote": "最大输入长度\n\n  991808\n\n  最大输出长度\n\n  131072",
+     "status": "exact"
+    },
+    {
+     "claim": "输入<=256k 阶梯价 2/8 元",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+     "quote": "| 输入 | 2 | 每百万tokens |",
+     "status": "normalized"
+    },
+    {
+     "claim": "enable_thinking 适用于 Qwen3.7 系列",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+     "quote": "enable_thinking   boolean  （可选）\n 使用混合思考（回复前既可思考也可不思考）模型时，是否开启思考模式。适用于 Qwen3.7、Qwen3.6、Qwen3.5、Qwen3、Qwen3-Omni-Flash、Qwen3-VL  模型",
+     "status": "exact"
+    },
+    {
+     "claim": "256k<输入<=1m 阶梯价 6/24 元",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+     "quote": "| 输入 | 6 | 每百万tokens |",
+     "status": "normalized"
+    }
+   ]
+  },
+  {
+   "provider": "dashscope-bailian",
+   "model": "qwen3.8-flash",
+   "label": "千问 qwen3.8-flash（多模态，低价）",
+   "contextWindow": 1000000,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "\"enable_thinking\": true",
+    "off": "\"enable_thinking\": false",
+    "default": "qwen3.8-flash 为混合思考模式且默认开启思考"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/medium/xhigh（qwen3.8 系默认 xhigh）",
+    "levels": [
+     "low",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.8,
+    "outputPerM": 2.7,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "华北2（北京）原价：输入 0.8元/M、输出 2.7元/M；输入（缓存命中）0.1元/M；显式缓存创建 1.25元/M。上下文限制与 qwen3.8-max 相同（1M / 输出131,072 / 思维链262,144）。"
+   },
+   "strengths": [
+    "便宜",
+    "多模态",
+    "长上下文",
+    "高性价比"
+   ],
+   "unverified": [
+    "evidence#2 未逐字核到（not_on_page）：qwen3.8-flash 混合思考模式默认开启",
+    "evidence#3 未逐字核到（not_on_page）：价格输入 0.8 / 输出 2.7 每百万 tokens"
+   ],
+   "evidence": [
+    {
+     "claim": "模型调用 ID 为 qwen3.8-flash",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+     "quote": "模型调用 ID（ model  参数取值）： qwen3.8-flash",
+     "status": "exact"
+    },
+    {
+     "claim": "上下文 1M、最大输出 131072、思维链 262144",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+     "quote": "上下文长度\n\n  1000000\n\n  最大思维链长度\n\n  262144",
+     "status": "exact"
+    },
+    {
+     "claim": "qwen3.8-flash 混合思考模式默认开启",
+     "url": "https://help.aliyun.com/zh/model-studio/deep-thinking",
+     "quote": "Qwen3.8 Flash series (hybrid thinking mode, thinking enabled by default ): qwen3.8-flash",
+     "status": "unverified"
+    },
+    {
+     "claim": "价格输入 0.8 / 输出 2.7 每百万 tokens",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+     "quote": "| 输入 | 0.8 | 每百万tokens |",
+     "status": "normalized"
+    }
+   ]
+  },
+  {
+   "provider": "dashscope-bailian",
+   "model": "qwen3.8-max",
+   "label": "千问 qwen3.8-max（多模态旗舰）",
+   "contextWindow": 1000000,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "\"enable_thinking\": true",
+    "off": "\"enable_thinking\": false",
+    "default": "qwen3.8-max 为混合思考模式且默认开启思考（thinking enabled by default）"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/medium/xhigh（qwen3.8 系默认 xhigh；与 thinking_budget 互斥、可互转）",
+    "levels": [
+     "low",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 12.0,
+    "outputPerM": 36.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "华北2（北京）原价：输入 12元/M、输出 36元/M；输入（缓存命中）1.5元/M；Batch File 半价（6/18）；显式缓存创建 15元/M。另有新加坡/法兰克福等区域价。思考模式下最大输入 983,616、最大思维链 262,144。"
+   },
+   "strengths": [
+    "多模态",
+    "长上下文",
+    "编程",
+    "Agent"
+   ],
+   "unverified": [
+    "evidence#2 未逐字核到（not_on_page）：qwen3.8-max 混合思考模式默认开启",
+    "evidence#3 未逐字核到（not_on_page）：价格输入 12 / 输出 36 每百万 tokens"
+   ],
+   "evidence": [
+    {
+     "claim": "模型调用 ID 为 qwen3.8-max",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+     "quote": "模型调用 ID（ model  参数取值）： qwen3.8-max",
+     "status": "exact"
+    },
+    {
+     "claim": "上下文 1M、最大输入 991,808、最大输出 131,072、思维链 262,144",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+     "quote": "最大输入长度\n\n  991808\n\n  最大输出长度\n\n  131072",
+     "status": "exact"
+    },
+    {
+     "claim": "qwen3.8-max 混合思考模式默认开启",
+     "url": "https://help.aliyun.com/zh/model-studio/deep-thinking",
+     "quote": "Qwen3.8 Max 系列 (hybrid thinking mode, thinking enabled by default ): qwen3.8-max, qwen3.8-max-0902",
+     "status": "unverified"
+    },
+    {
+     "claim": "价格输入 12 / 输出 36 每百万 tokens",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+     "quote": "| 输入 | 12 | 每百万tokens |",
+     "status": "normalized"
+    },
+    {
+     "claim": "qwen3.8 系列 reasoning_effort 默认 xhigh，档位 low/medium/xhigh 且与 thinking_budget 互斥",
+     "url": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+     "quote": "**qwen3.8系列模型：默认值为**`xhigh` 可选值： - `xhigh`（默认）：高力度推理 - `medium`：中力度推理 - `low`：低力度推理",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "deepseek",
+   "model": "deepseek-flash",
+   "label": "DeepSeek Flash（V4.1-Flash，支持视觉）",
+   "contextWindow": 1000000,
+   "maxOutput": 393216,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "不传时默认开启思考，默认 effort 为 high"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/high/max（minimal/medium/xhigh/ultra 会被映射，见文档映射表）",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 8.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "价格为高峰时段（人民币）：输入（缓存未命中）2元/M、输出8元/M；空闲时段一律半价（输入1元、输出4元）；缓存命中高峰0.04元/M。分时段计价、缓存命中价与输入未命中价不同。"
+   },
+   "strengths": [
+    "便宜",
+    "视觉理解",
+    "长上下文",
+    "高并发"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "官方价格：百万 tokens 输入（缓存未命中）空闲 1元 / 高峰 2元；百万 tokens 输出 空闲 4元 / 高峰 8元",
+     "url": "https://api-docs.deepseek.com/quick_start/pricing/",
+     "quote": "百万tokens输入（缓存未命中） 空闲时段 1元 高峰时段 2元",
+     "status": "unverified"
+    },
+    {
+     "claim": "deepseek-flash 上下文 1M、最大输出 384K、支持非思考与思考（默认）模式",
+     "url": "https://api-docs.deepseek.com/quick_start/pricing/",
+     "quote": "模型版本 | DeepSeek-V4.1-Flash | DeepSeek-V4-Pro-0813",
+     "status": "unverified"
+    },
+    {
+     "claim": "思考开关与档位参数",
+     "url": "https://api-docs.deepseek.com/guides/thinking_mode",
+     "quote": "Thinking Mode Toggle (1) \n  {\"thinking\": {\"type\": \"enabled/disabled\"}}",
+     "status": "exact"
+    },
+    {
+     "claim": "思考默认开启且默认 effort 为 high；effort 档位映射",
+     "url": "https://api-docs.deepseek.com/guides/thinking_mode",
+     "quote": "1) Thinking mode is enabled by default, with the default effort being  high",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "deepseek",
+   "model": "deepseek-v4-pro",
+   "label": "DeepSeek V4 Pro（0813，旗舰推理）",
+   "contextWindow": 1000000,
+   "maxOutput": 393216,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "不传时默认开启思考，默认 effort 为 high"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/high/max",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 9.0,
+    "outputPerM": 27.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "价格为高峰时段（人民币）：输入（缓存未命中）9元/M、输出27元/M；空闲时段半价（4.5元/13.5元）；缓存命中高峰0.30元/M。分时段计价。"
+   },
+   "strengths": [
+    "推理",
+    "代码",
+    "长上下文"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "deepseek-v4-pro 高峰价：输入缓存未命中 9元/M、输出 27元/M",
+     "url": "https://api-docs.deepseek.com/quick_start/pricing/",
+     "quote": "百万tokens输入（缓存未命中） 空闲时段 1元 高峰时段 2元",
+     "status": "unverified"
+    },
+    {
+     "claim": "模型版本为 DeepSeek-V4-Pro-0813",
+     "url": "https://api-docs.deepseek.com/quick_start/pricing/",
+     "quote": "DeepSeek-V4-Pro-0813",
+     "status": "exact"
+    },
+    {
+     "claim": "thinking 开关与 reasoning_effort 适用于两模型",
+     "url": "https://api-docs.deepseek.com/guides/thinking_mode",
+     "quote": "Thinking Mode Toggle (1) \n  {\"thinking\": {\"type\": \"enabled/disabled\"}}",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "label": "Gemini 2.5 Flash",
+   "contextWindow": 1048576,
+   "maxOutput": 65536,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "generationConfig": {
+      "thinkingConfig": {
+       "thinkingBudget": -1
+      }
+     }
+    },
+    "off": {
+     "generationConfig": {
+      "thinkingConfig": {
+       "thinkingBudget": 0
+      }
+     }
+    },
+    "default": "不传 thinkingConfig 时动态思考默认开启（Default=Dynamic thinking / Auto up to 8,192 tokens）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "generationConfig.thinkingConfig.thinkingBudget（2.5 Flash 取值 1–24,576；-1=动态；0=关）",
+    "levels": [
+     "-1（动态，默认）",
+     "0（关思考）",
+     "1-24576（显式预算区间）"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.3,
+    "outputPerM": 2.5,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "输入 $0.30（text/image/video）、音频 $1.00；输出 $2.50（含思考 token）；缓存 $0.03。OpenAI 兼容层 reasoning_effort 与 2.5 thinkingBudget 的映射：low=1,024 / medium=8,192 / high=24,576。"
+   },
+   "strengths": [
+    "性价比",
+    "混合推理",
+    "可关思考",
+    "1M 窗口"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "窗口/输出上限",
+     "url": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash",
+     "quote": "| token_auto Token limits [*] | Input token limit 1,048,576 Output token limit 65,536 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "0 = 关思考",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "If you set `thinking_budget` to `0` when using Gemini 2.5 Flash and\nGemini 2.5 Flash-Lite, no thought content is returned with the\nresponse.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "代码注释（0 关 / -1 动态）",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "        thinking_config=ThinkingConfig(\n            thinking_budget=1024,  # Use `0` to turn off thinking\n        )",
+     "status": "unchecked"
+    },
+    {
+     "claim": "budget 表",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "| Model | Minimum token amount | Maximum token amount | Default |\n| --- | --- | --- | --- |\n| Gemini 2.5 Flash | 1 | 24,576 | Auto (up to 8,192 tokens) |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "价格",
+     "url": "https://ai.google.dev/gemini-api/docs/pricing",
+     "quote": "| Input price | Free of charge | $0.30 (text / image / video)<br>$1.00 (audio) |\n| Output price (including thinking tokens) | Free of charge | $2.50 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "OpenAI 兼容层映射",
+     "url": "https://ai.google.dev/gemini-api/docs/openai",
+     "quote": "reasoning_effort` (OpenAI) | `thinking_level` (Gemini 3.1 Pro) | `thinking_level` (Gemini 3.1 Flash-Lite) | `thinking_level` (Gemini 3 Flash) | `thinking_budget` (Gemini 2.5) |\n|---|---|---|---|---|\n| `minimal` | `low` | `minimal` | `minimal` | `1,024` |\n| `low` | `low` | `low` | `low` | `1,024` |\n| `medium` | `medium` | `medium` | `medium` | `8,192` |\n| `high` | `high` | `high` | `high` | `24,576",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "google",
+   "model": "gemini-2.5-flash-lite",
+   "label": "Gemini 2.5 Flash-Lite",
+   "contextWindow": 1048576,
+   "maxOutput": 65536,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "generationConfig": {
+      "thinkingConfig": {
+       "thinkingBudget": 8192
+      }
+     }
+    },
+    "off": {
+     "generationConfig": {
+      "thinkingConfig": {
+       "thinkingBudget": 0
+      }
+     }
+    },
+    "default": "不传 thinkingConfig 时模型默认不思考（thinking 页模型表 Default Thinking=Off；Vertex：默认 Auto up to 8,192）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "generationConfig.thinkingConfig.thinkingBudget（2.5 Flash-Lite 取值 512–24,576；-1=动态；0=关）",
+    "levels": [
+     "-1（动态）",
+     "0（关思考）",
+     "512-24576（显式预算区间）"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.1,
+    "outputPerM": 0.4,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "输入 $0.10（text/image/video）、音频 $0.30；输出 $0.40（含思考 token）。"
+   },
+   "strengths": [
+    "最便宜",
+    "高吞吐",
+    "低延迟"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "默认思考状态（Off）",
+     "url": "https://ai.google.dev/gemini-api/docs/thinking",
+     "quote": "| Model | Default Thinking | Levels Supported |\n| --- | --- | --- |\n| gemini-2.5-pro | On | low, medium, high |\n| gemini-2.5-flash | On | low, medium, high |\n| gemini-2.5-flash-lite | Off | low, medium, high |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "窗口/输出上限",
+     "url": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite",
+     "quote": "| token_auto Token limits[*] | **Input token limit**<br>1,048,576<br>**Output token limit**<br>65,536 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "budget 表",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "| Model | Minimum token amount | Maximum token amount | Default |\n| --- | --- | --- | --- |\n| Gemini 2.5 Flash-Lite | 512 | 24,576 | Auto (up to 8,192 tokens) |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "价格",
+     "url": "https://ai.google.dev/gemini-api/docs/pricing",
+     "quote": "| Input price (text, image, video) | Free of charge | $0.10 (text / image / video)<br>$0.30 (audio) |\n| Output price (including thinking tokens) | Free of charge | $0.40 |",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "google",
+   "model": "gemini-2.5-pro",
+   "label": "Gemini 2.5 Pro",
+   "contextWindow": 1048576,
+   "maxOutput": 65536,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "generationConfig": {
+      "thinkingConfig": {
+       "thinkingBudget": -1
+      }
+     }
+    },
+    "off": null,
+    "default": "不传 thinkingConfig 时动态思考默认开启（2.5 Pro Default=Dynamic thinking；Vertex 文档：默认 auto、上限 8,192 token）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "generationConfig.thinkingConfig.thinkingBudget（Vertex 表：2.5 Pro 取值 128–32,768；-1=动态）",
+    "levels": [
+     "-1（动态，默认）",
+     "128-32768（显式预算区间）"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 1.25,
+    "outputPerM": 10.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "分档价：≤200k prompt 输入 $1.25 / 输出 $10；>200k prompt 输入 $2.50 / 输出 $15；输出价含思考 token（『Output price (including thinking tokens)』）。2.5 Pro 的 thinkingBudget 最小 128，不能为 0。"
+   },
+   "strengths": [
+    "2.5 系列旗舰",
+    "代码/数学/长上下文",
+    "1M 窗口"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "窗口/输出上限",
+     "url": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro",
+     "quote": "| token_auto Token limits [*] | Input token limit 1,048,576 Output token limit 65,536 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "不支持关思考 + budget 表",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "If you set `thinking_budget` to `0` when using Gemini 2.5 Flash and\nGemini 2.5 Flash-Lite, no thought content is returned with the\nresponse. However, reasoning-style text might still be present in the model's\noutput. Thinking can't be turned off for Gemini 2.5 Pro.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "budget 表（2.5 各模型）",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "| Model | Minimum token amount | Maximum token amount | Default |\n| --- | --- | --- | --- |\n| Gemini 2.5 Flash | 1 | 24,576 | Auto (up to 8,192 tokens) |\n| Gemini 2.5 Pro | 128 | 32,768 | Auto (up to 8,192 tokens) |\n| Gemini 2.5 Flash-Lite | 512 | 24,576 | Auto (up to 8,192 tokens) |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "默认动态 + -1 语义",
+     "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/thinking",
+     "quote": "By default, if `thinking_budget` is\nnot set, the model automatically controls how much it thinks up to a maximum of\n8,192 tokens. To use dynamic budget through the API, set `thinking_budget` to\n`-1`.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "价格分档（≤200k / >200k）",
+     "url": "https://ai.google.dev/gemini-api/docs/pricing",
+     "quote": "| Input price | Free of charge | $1.25, prompts <= 200k tokens<br>$2.50, prompts > 200k tokens |\n| Output price (including thinking tokens) | Free of charge | $10.00, prompts <= 200k tokens<br>$15.00, prompts > 200k |",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "google",
+   "model": "gemini-3.8-flash",
+   "label": "Gemini 3.8 Flash",
+   "contextWindow": 1048576,
+   "maxOutput": 65536,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "generationConfig": {
+      "thinkingConfig": {
+       "thinkingLevel": "high"
+      }
+     }
+    },
+    "off": null,
+    "default": "不传 thinkingConfig 时动态思考默认开启（模型表：Default Thinking = On (medium)）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "generationConfig.thinkingConfig.thinkingLevel",
+    "levels": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.75,
+    "outputPerM": 3.75,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "介绍价（至 2026-12-31）：输入 $0.75 / 输出 $3.75 /1M；2027-01-01 起恢复标准价输入 $1.50 / 输出 $7.50。输出价含思考 token。缓存 $0.075（介绍期）。thinking_level 与 thinking_budget 同传会报错（3.x 模型）。"
+   },
+   "strengths": [
+    "最新 Flash 旗舰",
+    "长时程软件工程",
+    "agentic"
+   ],
+   "unverified": [
+    "evidence#5 未逐字核到（not_on_page）：3.x 用 thinking_level，2.5 用 budget"
+   ],
+   "evidence": [
+    {
+     "claim": "窗口/输出/思考档位（minimal 报错）",
+     "url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+     "quote": "|token_auto Token limits [[*]](https://ai.google.dev/gemini-api/docs/tokens) |**Input token limit**\n1,048,576\n**Output token limit**\n65,536 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "Thinking 能力与 minimal 限制",
+     "url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+     "quote": "**[Thinking](https://ai.google.dev/gemini-api/docs/thinking)**\nSupported (low, medium, high)\nNote: `minimal` is not supported and returns an error.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "默认 thinking 级别",
+     "url": "https://ai.google.dev/gemini-api/docs/thinking",
+     "quote": "Model | Default Thinking | Levels Supported |\n|---|---|---|\n| gemini-3.8-flash | On (medium) | low, medium, high",
+     "status": "unchecked"
+    },
+    {
+     "claim": "默认级别（latest-model 页）",
+     "url": "https://ai.google.dev/gemini-api/docs/generate-content/latest-model",
+     "quote": "| Model | Model ID | Default thinking level | Pricing | Description |\n| --- | --- | --- | --- | --- |\n| Gemini 3.8 Flash | `gemini-3.8-flash` | `medium` | 3.8 Flash is available through the end of year at an introductory price of $0.75/1M input tokens and $3.75/1M output tokens; see pricing for more details. | Our most intelligent Flash model, engineered for long-horizon software engineering, autonomous agents, and complex enterprise workflows. |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "介绍价与恢复价",
+     "url": "https://ai.google.dev/gemini-api/docs/pricing",
+     "quote": "| Input price | Free of charge | $0.75 through December 31, 2026.<br>$1.50 starting January 1, 2027. |\n| Output price (including thinking tokens) | Free of charge | $3.75 through December 31, 2026.<br>$7.50 starting January 1, 2027. |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "3.x 用 thinking_level，2.5 用 budget",
+     "url": "https://ai.google.dev/gemini-api/docs/gemini-3",
+     "quote": "4. **Will my old `thinking_budget` code still work?** Yes, `thinking_budget` is\nstill supported for backward compatibility, but we recommend migrating to\n`thinking_level` for more predictable performance. Don't use both in the same\nrequest.",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "minimax-cn",
+   "model": "MiniMax-M2.7",
+   "label": "MiniMax-M2.7（204.8K，思考不可关）",
+   "contextWindow": 204800,
+   "maxOutput": 204800,
+   "maxOutputNote": "上限 204800，官方推荐 65536",
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "M2.7/M2.5/M2.1/M2 系列属「仅思考模式」：thinking 无法关闭（传 disabled 时 thinking 仍保持开启）"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.1,
+    "outputPerM": 8.4,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "标准价：输入 2.1元/M、输出 8.4元/M、缓存读取 0.42元/M、缓存写入 2.625元/M；M2.7-highspeed 为 4.2/16.8。max_tokens 推荐 65536(64K)、上限 204800(200K)。"
+   },
+   "strengths": [
+    "Agent",
+    "编程",
+    "工具调用"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "M2.7 上下文窗口 204,800",
+     "url": "https://platform.minimaxi.com/docs/guides/text-generation.md",
+     "quote": "MiniMax-M2.7                                        |  204,800  | **开启模型的自我迭代**（输出速度约 60 TPS）",
+     "status": "exact"
+    },
+    {
+     "claim": "M2.x thinking 无法关闭",
+     "url": "https://platform.minimaxi.com/docs/api-reference/text-chat-anthropic.md",
+     "quote": "disabled`：关闭 MiniMax-M3 的 thinking 输出。省略 `thinking`\n                时默认使用该值。对于 M2.x 模型，thinking 仍会保持开启。",
+     "status": "exact"
+    },
+    {
+     "claim": "M2.7 价格 2.1/8.4，highspeed 4.2/16.8",
+     "url": "https://platform.minimaxi.com/docs/guides/pricing-paygo.md",
+     "quote": "| **MiniMax-M2.7**           |             2.1            |             8.4            |            0.42            |            2.625           |",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "minimax-cn",
+   "model": "MiniMax-M3",
+   "label": "MiniMax-M3（1M 上下文，多模态 Frontier Coding）",
+   "contextWindow": 1000000,
+   "maxOutput": 524288,
+   "maxOutputNote": "上限 524288，官方推荐 131072",
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"adaptive\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "MiniMax-M3 省略 thinking 参数时默认关闭思考（不返回 thinking 块）；M2.x 模型 thinking 无法关闭"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.1,
+    "outputPerM": 8.4,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "标准价（永久五折后）：≤512k 输入 2.10元/M、输出 8.40元/M、缓存读取 0.42元/M；>512k 输入 4.20元/M、输出 16.80元/M、缓存读取 0.84元/M。优先档（service_tier=priority）为标准价 1.5 倍。max_tokens 推荐 131072(128K)、上限 524288(512K)。；max_tokens 推荐 131072(128K)、官方上限 524288(512K)，目录记上限"
+   },
+   "strengths": [
+    "编程",
+    "Agent",
+    "多模态",
+    "长上下文"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "MiniMax-M3 上下文窗口 1,000,000",
+     "url": "https://platform.minimaxi.com/docs/guides/text-generation.md",
+     "quote": "| [MiniMax-M3](https://www.minimaxi.com/models/text/m3) | 1,000,000 | **原生多模态、1M 上下文的 Frontier Coding 模型**（输出速度约 100+ TPS） |",
+     "status": "unverified"
+    },
+    {
+     "claim": "M3 thinking 参数取值 adaptive/disabled，默认 disabled（省略即不思考）",
+     "url": "https://platform.minimaxi.com/docs/api-reference/text-chat-anthropic.md",
+     "quote": "控制 MiniMax-M3 thinking。省略时默认关闭 thinking，响应不会包含 thinking 块。对于 M2.x\n            模型，thinking 无法关闭。",
+     "status": "exact"
+    },
+    {
+     "claim": "M3 价格 2.10/8.40（≤512k，五折后）",
+     "url": "https://platform.minimaxi.com/docs/guides/pricing-paygo.md",
+     "quote": "**MiniMax-M3**<br />≤ 512k 输入 tokens",
+     "status": "unverified"
+    },
+    {
+     "claim": "max_tokens 推荐 128K 上限 512K",
+     "url": "https://platform.minimaxi.com/docs/api-reference/text-chat-anthropic.md",
+     "quote": "For MiniMax-M3 the recommended value is 131072 (128K) and the maximum is 524288 (512K); for other models the recommended value is 65536 (64K) and the maximum is 204800 (200K).",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "minimax-intl",
+   "model": "MiniMax-M2.7",
+   "label": "MiniMax-M2.7（intl，204.8K）",
+   "contextWindow": 204800,
+   "maxOutput": 204800,
+   "maxOutputNote": "上限 204800，官方推荐 65536",
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "M2.x 系列仅思考模式：thinking cannot be disabled（省略或传 disabled 时思考仍开启）"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.3,
+    "outputPerM": 1.2,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "标准价：input $0.3/M、output $1.2/M、prompt caching read $0.06/M、write $0.375/M；M2.7-highspeed $0.6/$2.4。max_tokens 推荐 65536(64K)、上限 204800(200K)。"
+   },
+   "strengths": [
+    "Agent",
+    "编程",
+    "工具调用"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "intl M2.7 上下文 204,800",
+     "url": "https://platform.minimax.io/docs/guides/text-generation.md",
+     "quote": "| MiniMax-M2.7                                        | 204,800        | **Beginning the journey of recursive self-improvement** (output speed approximately 60 tps)",
+     "status": "exact"
+    },
+    {
+     "claim": "M2.x thinking cannot be disabled",
+     "url": "https://platform.minimax.io/docs/api-reference/text-chat-anthropic.md",
+     "quote": "Controls MiniMax-M3 thinking. When omitted, thinking is disabled by\n            default and responses do not include thinking blocks. For M2.x\n            models, thinking cannot be disabled.",
+     "status": "exact"
+    },
+    {
+     "claim": "intl M2.7 价格 $0.3/$1.2",
+     "url": "https://platform.minimax.io/docs/guides/pricing-paygo.md",
+     "quote": "| MiniMax-M2.7 | $0.3 / M tokens | $1.2 / M tokens | $0.06 / M tokens | $0.375 / M tokens |",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "minimax-intl",
+   "model": "MiniMax-M3",
+   "label": "MiniMax-M3（intl，1M 上下文，多模态）",
+   "contextWindow": 1000000,
+   "maxOutput": 524288,
+   "maxOutputNote": "上限 524288，官方推荐 131072",
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"adaptive\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "MiniMax-M3 省略 thinking 参数时默认关闭思考；M2.x 模型 thinking 无法关闭"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.3,
+    "outputPerM": 1.2,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "Standard tier（permanent 50% off 已折）：≤512k input $0.30/M、output $1.20/M、prompt caching read $0.06/M；>512k input $0.60/M、output $2.40/M。Priority（service_tier=priority）= 1.5× standard。max_tokens 推荐 131072(128K)、上限 524288(512K)。；max_tokens 推荐 131072(128K)、官方上限 524288(512K)，目录记上限"
+   },
+   "strengths": [
+    "编程",
+    "Agent",
+    "多模态",
+    "长上下文"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "intl M3 上下文 1,000,000",
+     "url": "https://platform.minimax.io/docs/guides/text-generation.md",
+     "quote": "| [MiniMax-M3](https://www.minimax.io/models/text/m3) | 1,000,000      | **Frontier multimodal coding model with 1M context window** (output speed approximately 100+ tps)",
+     "status": "exact"
+    },
+    {
+     "claim": "intl thinking 参数 schema：disabled/adaptive，默认 disabled；M2.x 无法关闭",
+     "url": "https://platform.minimax.io/docs/api-reference/text-chat-anthropic.md",
+     "quote": "Controls MiniMax-M3 thinking. When omitted, thinking is disabled by\n            default and responses do not include thinking blocks. For M2.x\n            models, thinking cannot be disabled.",
+     "status": "exact"
+    },
+    {
+     "claim": "intl M3 标准价（五折后）$0.30/$1.20",
+     "url": "https://platform.minimax.io/docs/guides/pricing-paygo.md",
+     "quote": "| MiniMax-M3 | | | |\n| â 512k input tokens Permanent 50% off | $0.60 $0.30 / M tokens | $2.40 $1.20 / M tokens | $0.12 $0.06 / M tokens |",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "moonshot",
+   "model": "kimi-k2.6",
+   "label": "Kimi K2.6（通用多模态，256K）",
+   "contextWindow": 262144,
+   "maxOutput": 32768,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "k2.6 默认开启思考（thinking.type 默认 enabled），无需传参也会输出思考内容"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 6.5,
+    "outputPerM": 27.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "输入价指缓存未命中 6.5元/M；缓存命中 1.1元/M；输出 27元/M。上下文窗口 262,144 tokens。"
+   },
+   "strengths": [
+    "通用",
+    "多模态",
+    "Agent"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "k2.6 支持视觉文本输入、思考与非思考模式、上下文 256k",
+     "url": "https://platform.kimi.com/docs/models.md",
+     "quote": "kimi-k2.6`                | 支持视觉与文本输入、思考与非思考模式、对话与 Agent 任务，上下文 256k",
+     "status": "exact"
+    },
+    {
+     "claim": "k2.6 thinking.type enabled（默认）/ disabled，可关思考",
+     "url": "https://platform.kimi.com/docs/guide/use-thinking-models.md",
+     "quote": "thinking.type`    | —                                        | 仅 `\"enabled\"`，始终思考，传 `\"disabled\"` 报错               | `\"enabled\"`（默认）/ `\"disabled\"",
+     "status": "exact"
+    },
+    {
+     "claim": "价格：输入（缓存命中）¥1.10 /（未命中）¥6.50、输出 ¥27.00",
+     "url": "https://platform.kimi.com/docs/pricing/chat.md",
+     "quote": "[\"kimi-k2.6\", \"1M tokens\", \"¥1.10\", \"¥6.50\", \"¥27.00\", \"262,144 tokens\"]",
+     "status": "unverified"
+    },
+    {
+     "claim": "max_tokens 默认 32k（32768）",
+     "url": "https://platform.kimi.com/docs/guide/kimi-k2-6-quickstart.md",
+     "quote": "| max_tokens | optional | 聊天完成时生成的最大 token 数。 | int | 默认值为32k，即32768 |",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "moonshot",
+   "model": "kimi-k2.7-code",
+   "label": "Kimi K2.7 Code（编程模型，256K）",
+   "contextWindow": 262144,
+   "maxOutput": null,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "kimi-k2.7-code 始终开启思考（thinking 仅支持 enabled，传 disabled 报错），无需也不应传 thinking 参数"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 6.5,
+    "outputPerM": 27.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "输入价指缓存未命中 6.5元/M；缓存命中 1.3元/M；输出 27元/M。上下文窗口 262,144 tokens。"
+   },
+   "strengths": [
+    "编程",
+    "Agent",
+    "多模态输入"
+   ],
+   "unverified": [
+    "maxOutput: 定价页只给上下文窗口，未单列最大输出"
+   ],
+   "evidence": [
+    {
+     "claim": "kimi-k2.7-code 是 Coding 模型，上下文 256k",
+     "url": "https://platform.kimi.com/docs/models.md",
+     "quote": "kimi-k2.7-code`           | Kimi 的 Coding 模型，在长上下文中更可靠地遵循指令，能以更高的成功率完成编程任务，上下文 256k",
+     "status": "exact"
+    },
+    {
+     "claim": "k2.7-code 始终思考、不支持 reasoning_effort",
+     "url": "https://platform.kimi.com/docs/guide/use-thinking-models.md",
+     "quote": "kimi-k2.7-code`**：面向代码场景，**始终开启思考**，且 **保留式思考（Preserved Thinking）始终开启**。",
+     "status": "exact"
+    },
+    {
+     "claim": "价格：输入（缓存命中）¥1.30 /（未命中）¥6.50、输出 ¥27.00、上下文 262,144 tokens",
+     "url": "https://platform.kimi.com/docs/pricing/chat.md",
+     "quote": "[\"kimi-k2.7-code\", \"1M tokens\", \"¥1.30\", \"¥6.50\", \"¥27.00\", \"262,144 tokens\"]",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "moonshot",
+   "model": "kimi-k3",
+   "label": "Kimi K3（旗舰，1M 上下文）",
+   "contextWindow": 1048576,
+   "maxOutput": null,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "K3 始终进行推理，不支持 thinking 参数（传入会报错）；不传参数即思考"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/high/max（顶层参数，默认 max）",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 20.0,
+    "outputPerM": 100.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "输入价指缓存未命中 20元/M；缓存命中 2元/M；输出 100元/M；缓存写入（TTL 5min）20元/M、（TTL 1h）40元/M。上下文窗口 1,048,576 tokens。"
+   },
+   "strengths": [
+    "推理",
+    "长上下文",
+    "多模态输入",
+    "编程"
+   ],
+   "unverified": [
+    "maxOutput: 官方模型列表/定价页未单列 kimi-k3 的最大输出长度，文档只给出上下文窗口"
+   ],
+   "evidence": [
+    {
+     "claim": "kimi-k3 是旗舰模型、100万 token 上下文",
+     "url": "https://platform.kimi.com/docs/models.md",
+     "quote": "kimi-k3`                  | Kimi 迄今能力最强的模型，拥有 2.8 万亿参数，原生支持视觉理解，并拥有 100 万 token 上下文窗口",
+     "status": "exact"
+    },
+    {
+     "claim": "K3 始终思考且不支持 thinking 参数，reasoning_effort 支持 low/high/max 默认 max",
+     "url": "https://platform.kimi.com/docs/guide/use-thinking-models.md",
+     "quote": "**`kimi-k3`**：旗舰思考模型，始终进行推理且保留式思考（Preserved Thinking）始终开启，并可能返回 `reasoning_content`；请求通过顶层 `reasoning_effort` 配置推理强度，支持 `\"low\"` / `\"high\"` / `\"max\"`（默认 `\"max\"`）。",
+     "status": "exact"
+    },
+    {
+     "claim": "价格：输入（缓存未命中）¥20.00、输出 ¥100.00、上下文 1,048,576 tokens",
+     "url": "https://platform.kimi.com/docs/pricing/chat.md",
+     "quote": "[\"kimi-k3\", \"1M tokens\", \"¥20.00\", \"¥40.00\", \"¥2.00\", \"¥20.00\", \"¥100.00\", \"1,048,576 tokens\"]",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "openai",
+   "model": "gpt-5.6-cyber",
+   "label": "GPT-5.6 Cyber",
+   "contextWindow": null,
+   "maxOutput": null,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": null,
+    "on": null,
+    "off": null,
+    "default": null
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 12.5,
+    "outputPerM": 75.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "pricing 页仅列短上下文一档（输入 $12.5 / 输出 $75 /1M；cached $1.25；cache writes $15.625）；长上下文档为 '-'。"
+   },
+   "strengths": [
+    "网络安全",
+    "攻防研究"
+   ],
+   "unverified": [
+    "contextWindow：官方 pricing/models 概览页未逐字给出 gpt-5.6-cyber 的窗口数值",
+    "maxOutput：同上，未逐字给出",
+    "thinkingSupported / thinkingOn / thinkingOff / thinkingDefault / depthSupported / depthParam / depthLevels：官方文档未逐字确认 gpt-5.6-cyber 是否接受 reasoning.effort（仅 GPT-5.6 家族通用说明，未点名该型号）"
+   ],
+   "evidence": [
+    {
+     "claim": "价格（pricing 页唯一信息）",
+     "url": "https://platform.openai.com/docs/pricing",
+     "quote": "|gpt-5.6-cyber |$12.50 |$1.25 |$15.625 |$75.00 |- |- |- |- |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "模型定位",
+     "url": "https://developers.openai.com/api/docs/models",
+     "quote": "GPT-5.6 Cyber Our most advanced cybersecurity model for authorized vulnerability research and security testing.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "GPT-5.6 家族 effort 枚举",
+     "url": "https://developers.openai.com/api/docs/guides/deployment-checklist",
+     "quote": "Use `reasoning.effort` to decide how much thinking the model should do before it\nanswers.\n\nFor GPT-5.6 models, the supported values are `none`, `low`, `medium`, `high`,\n`xhigh`, and `max`. The default is `medium`.",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "openai",
+   "model": "gpt-6-astra",
+   "label": "GPT-6 Astra",
+   "contextWindow": 1050000,
+   "maxOutput": 128000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "reasoning": {
+      "effort": "high"
+     }
+    },
+    "off": null,
+    "default": "不传 reasoning.effort 时按模型默认档位思考；官方模型页未逐字写明 Astra 的默认值（gpt-5.5 默认 medium、gpt-6-sol/luna 默认 medium 有逐字出处），Astra 默认值标 unverified。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning.effort（Responses）/ reasoning_effort（Chat Completions）",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 10.0,
+    "outputPerM": 50.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "短上下文输入 $10、输出 $50 /1M；长上下文（>272K input）输入 $20、输出 $75 /1M；cached input $1；cache writes $12.5；Batch/Flex 5 折、Fast 2 倍。reasoning token 按输出 token 计费（output_tokens_details.reasoning_tokens 计入 usage.output_tokens）。"
+   },
+   "strengths": [
+    "旗舰",
+    "复杂推理",
+    "agentic",
+    "computer use",
+    "最长上下文"
+   ],
+   "unverified": [
+    "thinkingDefault：官方未逐字写明 gpt-6-astra 的默认 effort 值（模型页与 Reasoning guide 均只给其它模型的默认）"
+   ],
+   "evidence": [
+    {
+     "claim": "context window 与 max output",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+     "quote": "GPT-6 Astra is our most capable model, built for the hardest end-to-end work.\nUse it for complex reasoning, coding, computer use, research, and document creation.\n`reasoning.effort` supports `low`, `medium`, `high`, `xhigh`, and `max`.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "模型细节数字",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+     "quote": "- 1,050,000 context window\n- Maximum input tokens: 922,000\n- 128,000 max output tokens",
+     "status": "unchecked"
+    },
+    {
+     "claim": "effort 枚举全集（模型相关子集）",
+     "url": "https://platform.openai.com/docs/guides/reasoning",
+     "quote": "The `reasoning.effort` parameter guides the model on how much to think when performing a task.\n\nSupported values are model-dependent and can include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "Astra 不支持 none",
+     "url": "https://developers.openai.com/api/docs/guides/latest-model",
+     "quote": "t-mode) - [Accuracy optimization](https://developers.openai.com/api/docs/guides/optimizing-llm-accuracy) ### Cost and throughput - [Cost optimization](https://developers.openai.c",
+     "status": "unchecked"
+    },
+    {
+     "claim": "短/长上下文两档价格",
+     "url": "https://platform.openai.com/docs/pricing",
+     "quote": "|gpt-6-astra |$10.00 |$1.00 |$12.50 |$50.00 |$20.00 |$2.00 |$25.00 |$75.00 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "价格换算口径",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+     "quote": "| Input | $10 | 1M tokens |\n| Cached input | $1 | 1M tokens |\n| Cache writes | $12.5 | 1M tokens |\n| Output | $50 | 1M tokens |",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "openai",
+   "model": "gpt-6-luna",
+   "label": "GPT-6 Luna",
+   "contextWindow": 1050000,
+   "maxOutput": 128000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "reasoning": {
+      "effort": "high"
+     }
+    },
+    "off": {
+     "reasoning": {
+      "effort": "none"
+     }
+    },
+    "default": "不传 reasoning.effort 时默认 medium（模型页逐字：『`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`』）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning.effort（Responses）/ reasoning_effort（Chat Completions）",
+    "levels": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.1,
+    "outputPerM": 0.5,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "短上下文输入 $0.1、输出 $0.5 /1M；长上下文输入 $0.2、输出 $0.75 /1M；cached input $0.01；cache writes $0.125。Chat Completions 下 function calling 仅在 reasoning_effort=none 时支持。"
+   },
+   "strengths": [
+    "最低价",
+    "高吞吐",
+    "低延迟"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "effort 枚举与默认值",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+     "quote": "GPT-6 Luna is our most efficient model for focused, high-volume tasks.\n`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`.\nUse the Responses API for built-in tools and function calling. Chat Completions supports function calling only with `reasoning_effort` set to `none`.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "窗口/输出/价格",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+     "quote": "- 1,050,000 context window\n- Maximum input tokens: 922,000\n- 128,000 max output tokens\n\n### Text tokens\n\n| Metric | Price | Unit |\n| --- | ---: | --- |\n| Input | $0.1 | 1M tokens |\n| Cached input | $0.01 | 1M tokens |\n| Cache writes | $0.125 | 1M tokens |\n| Output | $0.5 | 1M tokens |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "pricing 页两档",
+     "url": "https://platform.openai.com/docs/pricing",
+     "quote": "|gpt-6-luna |$0.10 |$0.01 |$0.125 |$0.50 |$0.20 |$0.02 |$0.25 |$0.75 |",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "openai",
+   "model": "gpt-6-sol",
+   "label": "GPT-6 Sol",
+   "contextWindow": 1050000,
+   "maxOutput": 128000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "reasoning": {
+      "effort": "high"
+     }
+    },
+    "off": {
+     "reasoning": {
+      "effort": "none"
+     }
+    },
+    "default": "不传 reasoning.effort 时默认 medium（模型页逐字：『`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`』）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning.effort（Responses）/ reasoning_effort（Chat Completions）",
+    "levels": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 10.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "短上下文输入 $2、输出 $10 /1M；长上下文输入 $4、输出 $15 /1M；cached input $0.2；cache writes $2.5。Chat Completions 下 function calling 仅在 reasoning_effort=none 时支持（模型页逐字）。reasoning token 按输出价计费。"
+   },
+   "strengths": [
+    "编码",
+    "agentic 工作流",
+    "均衡性价比"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "effort 枚举与默认值",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+     "quote": "GPT-6 Sol is built for complex coding and agentic workflows.\n\n`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`. Use the Responses API for built-in tools and function calling. Chat Completions supports function calling only with `reasoning_effort` set to `none`.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "窗口/输出/价格",
+     "url": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+     "quote": "- 1,050,000 context window\n- Maximum input tokens: 922,000\n- 128,000 max output tokens\n\n### Text tokens\n\n| Metric | Price | Unit |\n| --- | ---: | --- |\n| Input | $2 | 1M tokens |\n| Cached input | $0.2 | 1M tokens |\n| Cache writes | $2.5 | 1M tokens |\n| Output | $10 | 1M tokens |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "pricing 页两档",
+     "url": "https://platform.openai.com/docs/pricing",
+     "quote": "|gpt-6-sol |$2.00 |$0.20 |$2.50 |$10.00 |$4.00 |$0.40 |$5.00 |$15.00 |",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "openrouter",
+   "model": "stealth/space-bunny-alpha",
+   "label": "Space Bunny Alpha（匿名 stealth，1M 上下文，免费）",
+   "contextWindow": 1000000,
+   "maxOutput": null,
+   "maxOutputNote": "OpenRouter /models 未提供最大输出字段，故留空（不猜）",
+   "thinking": {
+    "supported": true,
+    "on": "{\"reasoning_effort\": \"high\"}",
+    "off": null,
+    "default": "由模型自行决定（实测默认也思考并返回 message.reasoning）。档位用 reasoning_effort；**思考不可关**：none 与 reasoning={enabled:false} 都被终点拒（400）"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: minimal/low/medium/high/xhigh/max（六档实测均 200 接受）",
+    "levels": [
+     "minimal",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.0,
+    "outputPerM": 0.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "OpenRouter /models 返回 prompt/completion 单价均为 0（stealth 匿名模型期免费）。"
+   },
+   "strengths": [
+    "编程",
+    "多模态",
+    "长上下文"
+   ],
+   "unverified": [
+    "档位对输出的影响：该端点 usage 恒报 reasoning_tokens=0，且每档只测 1 次时 completion 与思考文本长度都不随档位单调变化（minimal 1717 / low 1042 / medium 2079 / high 1460 / xhigh 507 / max 770 / 默认 634 tokens）——只能说「六档都被端点接受」，不能说「档位有效果」。",
+    "未公布真实规格（匿名 stealth 模型，厂商未披露参数量/训练细节/真实身份）。"
+   ],
+   "evidence": [
+    {
+     "claim": "模型 id、1M 上下文、价格为 0、支持 reasoning_effort 等参数",
+     "url": "https://openrouter.ai/api/v1/models",
+     "quote": "{\"id\":\"stealth/space-bunny-alpha\",\"name\":\"Space Bunny Alpha\",\"context_length\":1000000,\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\"},\"supported_parameters\":[\"include_reasoning\",\"max_tokens\",\"reasoning\",\"reasoning_effort\",\"response_format\",\"temperature\",\"tool_choice\",\"tools\",\"top_p\"]}",
+     "status": "exact"
+    },
+    {
+     "claim": "简介：匿名大模型、推理快、编程强、原生多模态输入、可调推理强度、1M 上下文",
+     "url": "https://openrouter.ai/api/v1/models",
+     "quote": "Space Bunny Alpha is an anonymous large model with blazing-fast inference, strong coding capabilities and native multimodal input support. It delivers adjustable reasoning effort, and a 1M-token conte…",
+     "status": "exact"
+    },
+    {
+     "claim": "reasoning_effort 的合法取值集合",
+     "url": "https://openrouter.ai/api/v1/chat/completions（实测 400 回包）",
+     "quote": "reasoning_effort: Invalid option: expected one of \"max\"|\"xhigh\"|\"high\"|\"medium\"|\"low\"|\"minimal\"|\"none\"",
+     "status": "exact"
+    },
+    {
+     "claim": "思考不可关：reasoning_effort=none 与 reasoning={enabled:false} 均被拒",
+     "url": "https://openrouter.ai/api/v1/chat/completions（实测 400 回包）",
+     "quote": "Reasoning is mandatory for this endpoint and cannot be disabled.",
+     "status": "exact"
+    },
+    {
+     "claim": "六档强度 minimal/low/medium/high/xhigh/max 均被端点接受（200）",
+     "url": "https://openrouter.ai/api/v1/chat/completions（逐档实测）",
+     "quote": "reasoning_effort=minimal|low|medium|high|xhigh|max 逐档请求均返回 200，且回包 message.reasoning 非空",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "siliconflow",
+   "model": "deepseek-ai/DeepSeek-V3.2",
+   "label": "DeepSeek-V3.2（671B MoE，164K）",
+   "contextWindow": 164000,
+   "maxOutput": 164000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "\"enable_thinking\": true",
+    "off": "\"enable_thinking\": false",
+    "default": "enable_thinking 默认 True（硅基流动文档）；V3.1 需关思考才能用 function call"
+   },
+   "depth": {
+    "supported": true,
+    "param": "thinking_budget: 128~32768（推理模型思维链 token 上限）",
+    "levels": [
+     "thinking_budget 128-32768"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 4.0,
+    "outputPerM": 6.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "硅基流动为多模型聚合平台：模型价随官方调整（更新公告 2026-06-25 起多模型调价），另有 Pro/ 前缀（更高速率）版本、缓存命中价（约为输入价 1/10~1/20）、DeepSeek-V4-Flash 自 2026-09-01 起分时段定价（2:00-8:00 半价）。价格以平台实时展示为准。 本条价格取更新公告 2026-06-30 起 ¥4/M 输入、¥6/M 输出、缓存命中 ¥0.4/M。"
+   },
+   "strengths": [
+    "推理",
+    "代码",
+    "性价比"
+   ],
+   "unverified": [
+    "evidence#1 未逐字核到（not_on_page）：V3.2 价格 2026-06-30 起调整为输入 ¥4/M、输出 ¥6/M、缓"
+   ],
+   "evidence": [
+    {
+     "claim": "DeepSeek-V3.2 在售（模型广场）",
+     "url": "https://www.siliconflow.cn/models",
+     "quote": "deepseek-ai/DeepSeek-V3.2\n 发布时间:  2025年12月01日",
+     "status": "exact"
+    },
+    {
+     "claim": "V3.2 价格 2026-06-30 起调整为输入 ¥4/M、输出 ¥6/M、缓存命中 ¥0.4/M",
+     "url": "https://docs.siliconflow.cn/cn/release-notes/overview",
+     "quote": "- `Pro/deepseek-ai/DeepSeek-V3.2` 及 `deepseek-ai/DeepSeek-V3.2` 价格将于 **2026-06-30** 进行调整：\n  - 输入：¥4 / M Tokens\n  - 输出：¥6 / M Tokens\n  - 缓存命中：¥0.4 / M Tokens",
+     "status": "unverified"
+    },
+    {
+     "claim": "上下文长度 164K、最大输出 164K",
+     "url": "https://www.siliconflow.com/zh/models/deepseek-v3-2",
+     "quote": "上下文长度\n\n  164K\n\n\n   最大输出长度\n\n  164K",
+     "status": "exact"
+    },
+    {
+     "claim": "enable_thinking 支持 DeepSeek-V3.2，默认 True",
+     "url": "https://docs.siliconflow.com/en/api-reference/chat-completions/chat-completions",
+     "quote": "Switches between thinking and non-thinking modes. Default is True.  This field supports the following models:",
+     "status": "exact"
+    },
+    {
+     "claim": "thinking_budget 适用所有推理模型，范围 128~32768",
+     "url": "https://docs.siliconflow.com/en/api-reference/chat-completions/chat-completions",
+     "quote": "Maximum number of tokens for chain-of-thought output. This field applies to all Reasoning models.\n\n Required range :  128 <= x <= 32768",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "siliconflow",
+   "model": "deepseek-ai/DeepSeek-V4-Flash",
+   "label": "DeepSeek-V4-Flash（1M 上下文，可切换推理档）",
+   "contextWindow": 1049000,
+   "maxOutput": 393000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "V4-Flash 支持三种可切换推理模式：Non-Think、Think High、Think Max（模型描述）；平台端点不暴露 thinking 开关"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort（仅 deepseek-ai/DeepSeek-V4-Flash 适用，默认 high，复杂 Agent 请求自动 max）",
+    "levels": [
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 3.0,
+    "outputPerM": 9.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "自 2026-09-01 起分时段定价：每日 2:00~8:00（北京时间）缓存命中 ¥0.15/M、输入(未命中) ¥1.5/M、输出 ¥4.5/M；其他时间 ¥0.3/¥3/¥9。"
+   },
+   "strengths": [
+    "便宜",
+    "长上下文",
+    "推理"
+   ],
+   "unverified": [
+    "evidence#3 未逐字核到（not_on_page）：reasoning_effort 仅适用 DeepSeek-V4-Flash，默"
+   ],
+   "evidence": [
+    {
+     "claim": "V4-Flash 分时段定价表",
+     "url": "https://docs.siliconflow.cn/cn/release-notes/overview",
+     "quote": "| 每日 2:00 ～ 8:00（北京时间） | ¥0.15 / M Tokens | ¥1.5 / M Tokens | ¥4.5 / M Tokens |",
+     "status": "unverified"
+    },
+    {
+     "claim": "V4-Flash 1M 上下文、384K 输出、三种推理模式",
+     "url": "https://www.siliconflow.com/zh/models/deepseek-v4-flash",
+     "quote": "DeepSeek-V4-Flash is DeepSeek's latest open-source MoE model featuring 284B total parameters with only 13B activated during inference",
+     "status": "exact"
+    },
+    {
+     "claim": "上下文长度 1049K、最大输出 393K",
+     "url": "https://www.siliconflow.com/zh/models/deepseek-v4-flash",
+     "quote": "上下文长度\n\n  1049K\n\n\n   最大输出长度\n\n  393K",
+     "status": "exact"
+    },
+    {
+     "claim": "reasoning_effort 仅适用 DeepSeek-V4-Flash，默认 high",
+     "url": "https://docs.siliconflow.cn/cn/api-reference",
+     "quote": "reasoning_effort enum This field only applies to deepseek-ai/DeepSeek-V4-Flash. In thinking mode, the default effort for regular requests is high; for certain complex agent-type requests (such as Claude Code, OpenCode), the effort is automatically set to max.",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "siliconflow",
+   "model": "deepseek-ai/DeepSeek-V4-Pro",
+   "label": "DeepSeek-V4-Pro（1M 上下文，旗舰）",
+   "contextWindow": 1049000,
+   "maxOutput": 393000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "V4-Pro 支持最高 Think Max 的推理档；平台端点不暴露 thinking 开关"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort（V4 系列；文档中档位描述见 DeepSeek 官方 thinking_mode）",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 12.0,
+    "outputPerM": 24.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "原价：输入 ¥12/M、输出 ¥24/M、缓存命中 ¥1/M（2026-06-30 限时折扣结束后恢复原价；2026-08-03 起缓存命中调整为 ¥1/M）。"
+   },
+   "strengths": [
+    "推理",
+    "代码",
+    "长上下文"
+   ],
+   "unverified": [
+    "evidence#0 未逐字核到（not_on_page）：V4-Pro 原价 ¥12/¥24",
+    "evidence#2 未逐字核到（not_on_page）：V4-Pro Pro 缓存命中价调整为 ¥1/M"
+   ],
+   "evidence": [
+    {
+     "claim": "V4-Pro 原价 ¥12/¥24",
+     "url": "https://docs.siliconflow.cn/cn/release-notes/overview",
+     "quote": "- `deepseek-ai/DeepSeek-V4-Pro` 模型限时折扣将于 **2026-06-30** 结束，将恢复原价计费**：\n  - 输入：¥12 / M Tokens\n  - 输出：¥24 / M Tokens\n  - 缓存命中：¥0.1 / M Tokens",
+     "status": "unverified"
+    },
+    {
+     "claim": "V4-Pro 1M 上下文、393K 输出、Think Max",
+     "url": "https://www.siliconflow.com/zh/models/deepseek-v4-pro",
+     "quote": "Supporting a 1M-token context window and three reasoning effort modes up to Think Max, it achieves top-tier performance on coding benchmarks such as LiveCodeBench and Codeforces",
+     "status": "exact"
+    },
+    {
+     "claim": "V4-Pro Pro 缓存命中价调整为 ¥1/M",
+     "url": "https://docs.siliconflow.cn/cn/release-notes/overview",
+     "quote": "【模型价格调整】DeepSeek-V4-Pro 缓存命中输入 tokens 价格调整",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "siliconflow",
+   "model": "moonshotai/Kimi-K3",
+   "label": "Kimi-K3（2800B MoE，1049K 上下文）",
+   "contextWindow": 1049000,
+   "maxOutput": 262000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": null,
+    "off": null,
+    "default": "K3 为推理模型，SiliconFlow 端点不提供 thinking 开关参数；模型页参数面板为 Reasoning Effort（max 档默认）"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort（模型页参数面板，档位 max 默认）",
+    "levels": [
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "unknown",
+    "inputPerM": null,
+    "outputPerM": null,
+    "cachedPerM": null,
+    "currency": null,
+    "plan": null,
+    "notes": "国际站标 USD $2.7/$13.5；国内站未标人民币价。不折算汇率，故价格留空。"
+   },
+   "strengths": [
+    "推理",
+    "多模态",
+    "长上下文",
+    "编程"
+   ],
+   "unverified": [
+    "inputPricePerM/outputPricePerM(人民币): 硅基流动模型页以美元标价，人民币数值系按汇率折算，官方未公布人民币单价",
+    "inputPricePerM",
+    "outputPricePerM",
+    "evidence#2 未逐字核到（not_on_page）：Reasoning Effort max 档"
+   ],
+   "evidence": [
+    {
+     "claim": "Kimi-K3 在售、上下文 1049K、最大输出 262K",
+     "url": "https://www.siliconflow.com/zh/models/kimi-k3",
+     "quote": "上下文长度\n\n  1049K\n\n\n   最大输出长度\n\n  262K",
+     "status": "exact"
+    },
+    {
+     "claim": "价格 $2.7/$13.5 每百万 tokens",
+     "url": "https://www.siliconflow.com/zh/models/kimi-k3",
+     "quote": "Input: \n\n  $\n\n  2.7\n\n  / M Tokens",
+     "status": "exact"
+    },
+    {
+     "claim": "Reasoning Effort max 档",
+     "url": "https://www.siliconflow.com/zh/models/kimi-k3",
+     "quote": "Reasoning Effortmax\n\nControls how much the model thinks before generating an answer.",
+     "status": "unverified"
+    }
+   ]
+  },
+  {
+   "provider": "siliconflow",
+   "model": "zai-org/GLM-5.3",
+   "label": "GLM-5.3（744B，1M 上下文）",
+   "contextWindow": 1049000,
+   "maxOutput": 262000,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "\"enable_thinking\": true",
+    "off": "\"enable_thinking\": false",
+    "default": "enable_thinking 默认 True（硅基流动文档英文版列 GLM 系列支持该字段）"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/high/max（模型页参数面板）",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 6.0,
+    "outputPerM": 28.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "模型广场（国内站）标价输入 ￥6 / 输出 ￥28 每百万 tokens、上下文 1024K。"
+   },
+   "strengths": [
+    "编程",
+    "Agent",
+    "长上下文"
+   ],
+   "unverified": [
+    "maxOutput: 硅基流动国内模型广场标上下文 1024K，未单列最大输出；英文模型页标 262K，两口径不一致，取英文模型页 262000 但存疑",
+    "maxOutput",
+    "evidence#1 未逐字核到（not_on_page）：模型广场价格 ￥6/￥28",
+    "evidence#2 未逐字核到（not_on_page）：Reasoning Effort low/high/max"
+   ],
+   "evidence": [
+    {
+     "claim": "GLM-5.3 在硅基流动在售、1M 上下文",
+     "url": "https://www.siliconflow.cn/models",
+     "quote": "zai-org/GLM-5.3\n 发布时间:  2026年08月14日",
+     "status": "exact"
+    },
+    {
+     "claim": "模型广场价格 ￥6/￥28",
+     "url": "https://www.siliconflow.cn/models",
+     "quote": "输入: ￥6 / M Tokens",
+     "status": "normalized"
+    },
+    {
+     "claim": "Reasoning Effort low/high/max",
+     "url": "https://www.siliconflow.com/zh/models/glm-5-3",
+     "quote": "Reasoning Efforthighmaxlow\n\nControls how much the model thinks before generating an answer.",
+     "status": "unverified"
+    },
+    {
+     "claim": "enable_thinking 默认 True 且支持 GLM 系列",
+     "url": "https://docs.siliconflow.com/en/api-reference/chat-completions/chat-completions",
+     "quote": "enable_thinking\n   boolean \n\n\n\n\n   Switches between thinking and non-thinking modes. Default is True.",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "xai",
+   "model": "grok-4.5",
+   "label": "Grok 4.5",
+   "contextWindow": 500000,
+   "maxOutput": null,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "reasoning": {
+      "effort": "high"
+     }
+    },
+    "off": null,
+    "default": "不传 reasoning_effort 时默认 high（『If not specified, `reasoning_effort` defaults to `\"high\"`. Reasoning cannot be disabled.』）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort（Responses API：reasoning.effort）",
+    "levels": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 6.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "短上下文输入 $2 / 输出 $6 /1M；≥200k 输入 $4 / 输出 $12；cached input $0.30（短档，比 4.6/4.7 低）。xhigh 请求会被当作 high 处理。"
+   },
+   "strengths": [
+    "上一代旗舰",
+    "便宜一档的缓存价"
+   ],
+   "unverified": [
+    "maxOutput：官方未逐字给出数值（模型页无『Output limit』行给数值）",
+    "evidence#0 未逐字核到（not_on_page）：models 页价格表（4.5 行）",
+    "evidence#1 未逐字核到（not_on_page）：推理总结表（4.5 行）",
+    "evidence#2 未逐字核到（not_on_page）：xhigh 回退行为",
+    "evidence#3 未逐字核到（not_on_page）：支持 effort 参数的模型清单"
+   ],
+   "evidence": [
+    {
+     "claim": "models 页价格表（4.5 行）",
+     "url": "https://docs.x.ai/docs/models",
+     "quote": "| grok-4.5 (< 200k prompt tokens) | 500k | $2.00 | $0.30 | $6.00 |\n| grok-4.5 (â¥ 200k prompt tokens) | 500k | $4.00 | $0.60 | $12.00 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "推理总结表（4.5 行）",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "| Model | `reasoning` parameter | Behavior |\n| --- | --- | --- |\n| `grok-4.5` | `reasoning.effort`: `\"low\"` / `\"medium\"` / `\"high\"` (default) | Controls reasoning depth (cannot be disabled) |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "xhigh 回退行为",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "`\"xhigh\"` is available on `grok-4.6` and later. On models that do not support it, such as `grok-4.5`, requests with `\"xhigh\"` are treated as `\"high\"`.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "支持 effort 参数的模型清单",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "`grok-4.7`, `grok-4.6`, and `grok-4.5` support the `reasoning_effort` parameter, which controls how much effort the model spends thinking before responding.",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "xai",
+   "model": "grok-4.6",
+   "label": "Grok 4.6",
+   "contextWindow": 500000,
+   "maxOutput": null,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "reasoning": {
+      "effort": "high"
+     }
+    },
+    "off": null,
+    "default": "不传 reasoning_effort 时默认 high（『If not specified, `reasoning_effort` defaults to `\"high\"`. Reasoning cannot be disabled.』）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort（Responses API：reasoning.effort）",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 6.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "短上下文（<200k prompt）输入 $2 / 输出 $6 /1M；≥200k 输入 $4 / 输出 $12；cached input $0.50（短档）。xhigh 在 4.6 及以后可用。"
+   },
+   "strengths": [
+    "旗舰编码/全能",
+    "agentic 工具调用",
+    "1M→500k 窗口"
+   ],
+   "unverified": [
+    "contextWindow：以 docs.x.ai pricing/models 页『500k』为准（500,000）",
+    "evidence#0 未逐字核到（not_on_page）：models 页价格表",
+    "evidence#1 未逐字核到（not_on_page）：推理总结表（4.6 行）",
+    "evidence#2 未逐字核到（not_on_page）：默认与不可关",
+    "evidence#3 未逐字核到（not_on_page）：xhigh 可用范围"
+   ],
+   "evidence": [
+    {
+     "claim": "models 页价格表",
+     "url": "https://docs.x.ai/docs/models",
+     "quote": "| grok-4.6 (< 200k prompt tokens) | 500k | $2.00 | $0.50 | $6.00 |\n| grok-4.6 (â¥ 200k prompt tokens) | 500k | $4.00 | $1.00 | $12.00 |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "推理总结表（4.6 行）",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "| Model | `reasoning` parameter | Behavior |\n| --- | --- | --- |\n| `grok-4.6` | `reasoning.effort`: `\"low\"` / `\"medium\"` / `\"high\"` (default) / `\"xhigh\"` | Controls reasoning depth (cannot be disabled) |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "默认与不可关",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "If not specified, `reasoning_effort` defaults to `\"high\"`. Reasoning cannot be disabled.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "xhigh 可用范围",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "`\"xhigh\"` is available on `grok-4.6` and later. On models that do not support it, such as `grok-4.5`, requests with `\"xhigh\"` are treated as `\"high\"`.",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "xai",
+   "model": "grok-4.7",
+   "label": "Grok 4.7",
+   "contextWindow": 500000,
+   "maxOutput": null,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": {
+     "reasoning": {
+      "effort": "high"
+     }
+    },
+    "off": null,
+    "default": "不传 reasoning_effort 时默认 high（『If not specified, `reasoning_effort` defaults to `\"high\"`. Reasoning cannot be disabled.』）。"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort（Responses API：reasoning.effort）",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 2.0,
+    "outputPerM": 6.0,
+    "cachedPerM": null,
+    "currency": "USD",
+    "plan": null,
+    "notes": "短上下文（<200k prompt）输入 $2 / 输出 $6 /1M；≥200k 输入 $4 / 输出 $12；cached input $0.50（短档）。presencePenalty/frequencyPenalty/stop 与推理模型不兼容会报错。Responses API 每次响应都带 reasoning.encrypted_content。"
+   },
+   "strengths": [
+    "前沿编码",
+    "agentic",
+    "加密思考回传"
+   ],
+   "unverified": [
+    "evidence#1 未逐字核到（not_on_page）：默认 high + 不可关",
+    "evidence#2 未逐字核到（not_on_page）：档位表",
+    "evidence#3 未逐字核到（not_on_page）：总结表（4.7 档位）"
+   ],
+   "evidence": [
+    {
+     "claim": "模型页 At a glance",
+     "url": "https://docs.x.ai/developers/grok-4-7",
+     "quote": "| Property | Value |\n| --- | --- |\n| Model name | `grok-4.7` |\n| Context window | 500,000 tokens |\n| Knowledge cutoff | May 2026 |\n| Modalities | Text and image input; text output |\n| Output limit | No text output limit |\n| Input price | $2.00 / 1M tokens |\n| Output price | $6.00 / 1M tokens |\n| Reasoning | Low, medium, high (default), or xhigh |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "默认 high + 不可关",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "If not specified, `reasoning_effort` defaults to `\"high\"`. Reasoning cannot be disabled.",
+     "status": "unchecked"
+    },
+    {
+     "claim": "档位表",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "| Setting | Description | Best For |\n| --- | --- | --- |\n| `\"low\"` | Uses some reasoning tokens, but still fast | Latency-sensitive agentic use and simple tool calling. |\n| `\"medium\"` | More thinking for less-latency sensitive applications | Complex data analysis and long-context reasoning. |\n| `\"high\"` (default) | Uses more reasoning tokens for deeper thinking | Very challenging problems, complex math, multi-step logic, competition-level tasks |\n| `\"xhigh\"` | Maximum reasoning depth, with correspondingly higher latency | The hardest problems, where answer quality matters more than response time |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "总结表（4.7 档位）",
+     "url": "https://docs.x.ai/docs/guides/reasoning",
+     "quote": "| Model | `reasoning` parameter | Behavior |\n| --- | --- | --- |\n| `grok-4.7` | `reasoning.effort`: `\"low\"` / `\"medium\"` / `\"high\"` (default) / `\"xhigh\"` | Controls reasoning depth (cannot be disabled) |",
+     "status": "unchecked"
+    },
+    {
+     "claim": "长上下文双档价",
+     "url": "https://docs.x.ai/developers/pricing",
+     "quote": "| [grok-4.7](https://docs.x.ai/developers/models/grok-4.7) <br>Long context ≥ 200k tokens | 500k | $2.00 | $0.50 | $6.00 | $4.00 | $1.00 | $12.00 |",
+     "status": "unchecked"
+    }
+   ]
+  },
+  {
+   "provider": "zhipu",
+   "model": "glm-4.6",
+   "label": "GLM-4.6（200K，混合思考）",
+   "contextWindow": 200000,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "GLM-4.6 默认为「混合 thinking（自动开启）」，即由模型自动判断是否思考"
+   },
+   "depth": {
+    "supported": false,
+    "param": null,
+    "levels": []
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": null,
+    "outputPerM": null,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "GLM-4.6 未出现在现行 API 定价页的文本模型表中（页面注明「历史模型价格将继续保留…请参见模型概览」），本次未取得官方价格表原文，价格置 null。"
+   },
+   "strengths": [
+    "编程",
+    "便宜",
+    "工具调用"
+   ],
+   "unverified": [
+    "inputPricePerM/outputPricePerM: 现行官方定价页文本模型表未列 GLM-4.6（历史模型价格需查模型概览，本次未取得原文）"
+   ],
+   "evidence": [
+    {
+     "claim": "GLM-4.6 上下文 200K、最大输出 128K",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-4.6.md",
+     "quote": "上下文长度**：上下文窗口由 128K→200K，适应更长的代码和智能体任务。",
+     "status": "exact"
+    },
+    {
+     "claim": "GLM-4.6 默认混合 thinking 自动开启",
+     "url": "https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode.md",
+     "quote": "GLM-5.3 GLM-5.3-FLASH GLM-5.2 GLM-5.1 GLM-5 GLM-4.7 系列默认开启 Thinking，这一点不同于 GLM-4.6 的默认“混合 thinking（自动开启）”。",
+     "status": "exact"
+    },
+    {
+     "claim": "glm-4.6 属于对话补全 model enum；GLM-4.6 系列最大 128K 输出",
+     "url": "https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8",
+     "quote": "GLM-4.6  系列最大支持  128K  输出长度，  GLM-4.5  系列最大支持  96K  输出长度，建议设置不小于  1024  。",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "zhipu",
+   "model": "glm-5",
+   "label": "GLM-5（基座，200K）",
+   "contextWindow": 200000,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}}",
+    "off": "{\"thinking\": {\"type\": \"disabled\"}}",
+    "default": "GLM-5/4.7 系列默认开启 Thinking（不同于 GLM-4.6 的默认混合自动思考）"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: max/xhigh/high/medium/low/minimal/none（GLM-5 默认 max，仅 GLM-5.2+ 支持）",
+    "levels": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "minimal",
+     "none"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 4.0,
+    "outputPerM": 18.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "阶梯价：输入长度 [0,32K) 输入4元/输出18元；输入长度 ≥32K 输入6元/输出22元；缓存命中 1元/1.5元；缓存存储限时免费。"
+   },
+   "strengths": [
+    "编程",
+    "Agent",
+    "代码工程"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "GLM-5 上下文 200K、最大输出 128K",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.md",
+     "quote": "定位 基座模型 输入模态 文本 输出模态 文本 上下文窗口 200K 最大输出 Tokens 128K",
+     "status": "unverified"
+    },
+    {
+     "claim": "GLM-5/4.7 默认开启 thinking，可 disabled 关闭",
+     "url": "https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode.md",
+     "quote": "GLM-5.3 GLM-5.3-FLASH GLM-5.2 GLM-5.1 GLM-5 GLM-4.7 系列默认开启 Thinking，这一点不同于 GLM-4.6 的默认“混合 thinking（自动开启）”。",
+     "status": "exact"
+    },
+    {
+     "claim": "GLM-5 阶梯价 4/18 与 6/22",
+     "url": "https://docs.bigmodel.cn/cn/guide/start/pricing.md",
+     "quote": "| GLM-5       | 输入长度 \\[0, 32K) | 4                 | 18                | 限时免费                 | 1                 |",
+     "status": "exact"
+    },
+    {
+     "claim": "glm-5 属于对话补全 model enum",
+     "url": "https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8",
+     "quote": "Available options :    glm-5.3 ,  \n  glm-5.2 ,  \n  glm-5.1 ,  \n  glm-5-turbo ,  \n  glm-5 ,  \n  glm-4.7 ,  \n  glm-4.7-flash ,  \n  glm-4.7-flashx ,  \n  glm-4.6 ,  \n  glm-4.5-air ,  \n  glm-4.5-airx ,  \n  glm-4.5-flash ,  \n  glm-4-flash-250414 ,  \n  glm-4-flashx-250414",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "zhipu",
+   "model": "glm-5.3",
+   "label": "GLM-5.3（旗舰，1M 上下文）",
+   "contextWindow": 1048576,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}, \"reasoning_effort\": \"max\"}",
+    "off": null,
+    "default": "GLM-5.3 始终启用思考，不支持禁用（thinking.type 仅 enabled）；reasoning_effort 默认 max"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/high/max（默认 max）",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 8.0,
+    "outputPerM": 28.0,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "无阶梯价：输入 8元/M、输出 28元/M；缓存命中 2元/M；缓存存储限时免费。"
+   },
+   "strengths": [
+    "编程",
+    "Agent",
+    "长上下文",
+    "网络安全"
+   ],
+   "unverified": [],
+   "evidence": [
+    {
+     "claim": "GLM-5.3 支持 1M 上下文、最大输出 128K",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3.md",
+     "quote": "GLM-5.3 目前仅支持处理文本模态信息，支持 1M 上下文窗口，最大输出 Tokens 为 128K。",
+     "status": "exact"
+    },
+    {
+     "claim": "GLM-5.3 始终思考，reasoning_effort 三档 low/high/max 默认 max，不再支持 disabled",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3.md",
+     "quote": "GLM-5.3 会始终启用思考功能，支持三个思考强度级别：`low`、`high` 和 `max`，并不再支持禁用思考功能。",
+     "status": "exact"
+    },
+    {
+     "claim": "价格 8/28 元每百万 tokens",
+     "url": "https://docs.bigmodel.cn/cn/guide/start/pricing.md",
+     "quote": "| GLM-5.3        | 1M  | 8                 | 28                | 限时免费                 | 2                 | 文本          |",
+     "status": "exact"
+    },
+    {
+     "claim": "thinking.type 仅 enabled，传 disabled 请求会失败",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3.md",
+     "quote": "迁移提示：如果您的应用当前使用 `thinking.type: \"disabled\"`，请在将模型 ID 更新为 `glm-5.3` 之前，将其更改为 `enabled`，并将 `reasoning_effort` 设置为 `low`。否则，请求将失败。",
+     "status": "exact"
+    }
+   ]
+  },
+  {
+   "provider": "zhipu",
+   "model": "glm-5.3-flash",
+   "label": "GLM-5.3-Flash（多模态，1M 上下文，低价）",
+   "contextWindow": 1048576,
+   "maxOutput": 131072,
+   "maxOutputNote": null,
+   "thinking": {
+    "supported": true,
+    "on": "{\"thinking\": {\"type\": \"enabled\"}}",
+    "off": null,
+    "default": "与 GLM-5.3 一致：始终思考不可关；参数说明与 GLM-5.3 保持一致（含 reasoning_effort low/high/max 默认 max）"
+   },
+   "depth": {
+    "supported": true,
+    "param": "reasoning_effort: low/high/max（默认 max）",
+    "levels": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "pricing": {
+    "mode": "per-token",
+    "inputPerM": 0.8,
+    "outputPerM": 2.8,
+    "cachedPerM": null,
+    "currency": "CNY",
+    "plan": null,
+    "notes": "输入 0.8元/M、输出 2.8元/M；缓存命中 0.23元/M；缓存存储限时免费。官方 pricing 页标「5折限时两周」，表内已是折后价，另有 FlashX 版 2/7 元。"
+   },
+   "strengths": [
+    "多模态",
+    "便宜",
+    "长上下文",
+    "编程"
+   ],
+   "unverified": [
+    "evidence#3 未逐字核到（not_on_page）：glm-5.3-flash 为多模态视觉模型（vision model enum"
+   ],
+   "evidence": [
+    {
+     "claim": "GLM-5.3-Flash 文本参数与 GLM-5.3 一致、支持 1M 上下文",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash.md",
+     "quote": "**参数说明**：文本参数与 GLM-5.3 保持一致，支持 1M 上下文。",
+     "status": "exact"
+    },
+    {
+     "claim": "GLM-5.3-Flash 1M 上下文、128K 最大输出",
+     "url": "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash.md",
+     "quote": "上下文窗口. 1M. 最大输出. 128K",
+     "status": "unverified"
+    },
+    {
+     "claim": "价格 0.8/2.8 元每百万 tokens（5折限时）",
+     "url": "https://docs.bigmodel.cn/cn/guide/start/pricing.md",
+     "quote": "| GLM-5.3-Flash  | 1M  | 0.8               | 2.8               | 限时免费                 | 0.23              | 图片、视频、文件、文本 |",
+     "status": "exact"
+    },
+    {
+     "claim": "glm-5.3-flash 为多模态视觉模型（vision model enum）",
+     "url": "https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8",
+     "quote": "调用视觉模型代码。`GLM-5.3-Flash` 系列支持视觉理解，具备卓越的多模态理解能力和工具调用能力。",
+     "status": "unverified"
+    }
+   ]
+  }
+ ]
+}

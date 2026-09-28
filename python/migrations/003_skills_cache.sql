@@ -1,0 +1,6 @@
+-- 003_skills_cache.sql
+-- Placeholder: intentionally empty.
+--
+-- Reason: the skills_cache table is not needed yet (no skill-content cache
+-- layer exists in the codebase). Keeping the numbered slot reserved so a
+-- future skills cache can slot in at 003 without renumbering 004.

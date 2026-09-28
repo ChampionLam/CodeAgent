@@ -1,0 +1,16 @@
+# desk-agent Python sidecar — 依赖清单
+#
+# 安装（别手敲，走仓库里的脚本，两层一起装）：
+#   Windows：powershell -ExecutionPolicy Bypass -File scripts\bootstrap-venv.ps1
+#   Linux/macOS：bash scripts/bootstrap-venv.sh
+#
+# 分层（两层都由 scripts/bootstrap-venv.* 一次装齐，别只装第一层）：
+#   requirements.txt        —— 运行最小集（Pillow，图片附件必需）
+#   requirements-docs.txt   —— 文档提取 + 纯文本 + OCR 兜底
+#
+# 口径（用户 2026-09-26）：文档/文本读取是**功能自带能力**，部署时就要装齐，
+# 不能等用户拖进来才发现库没装。「可选」只表示缺了不影响进程启动，不表示可以不装。
+#
+# 版本是实测可装的组合（cp310-abi3 / cp314）。
+
+Pillow>=10.0

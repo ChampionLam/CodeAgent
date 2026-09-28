@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# CodeAgent 提交前防泄密闸门 —— 这个仓库是 public，提交前必须过这一关。
+#
+# 装法（本机一次性，钩子本身进仓）：git config core.hooksPath scripts/git-hooks
+# 确实需要放行某次提交：ALLOW_SECRETS=1 git commit ...
+# 想把「自己不想公开的词」也拦住：写进 .git/info/guard-words（一行一个，本机私有、不进仓）
+#
+# 只检查「将要提交的内容」（git 索引），不看工作区，避免误伤还没 add 的草稿。
+set -u
+
+if [ "${ALLOW_SECRETS:-}" = "1" ]; then
+  echo "[guard] ALLOW_SECRETS=1，跳过防泄密检查" >&2
+  exit 0
+fi
+
+fail=0
+report() {          # $1=标题 $2=命中内容
+  echo "" >&2
+  echo "[guard] ✗ $1" >&2
+  echo "$2" | sed 's/^/    /' >&2
+  fail=1
+}
+
+# 跳过钩子自身与测试夹具目录：钩子里的匹配模式、测试里的假串都不该被自己拦下。
+SKIP="^scripts/git-hooks/|^tests/"
+
+# 1) 密钥类文件根本不该进仓
+#    例外：.env.example / .env.sample / .env.template 是可以入库的空白模板
+#    （.gitignore 里也显式放行了 .env.example），新建仓库的首次提交必须能过。
+hits=$(git diff --cached --name-only | grep -E '(^|/)\.env$|(^|/)\.env\.[^.]+$|(^|/)config\.json$|\.db$|\.db-wal$|\.db-shm$|\.pem$|(^|/)id_(rsa|ed25519|ecdsa)$|credential|auth\.json' \
+  | grep -Ev '(^|/)\.env\.(example|sample|template)$' || true)
+[ -n "$hits" ] && report "有密钥/用户数据类文件被 add 了（.env / config.json / *.db / 私钥 / 凭证）" "$hits"
+
+# 2) 真 key 值模式
+hits=$(git grep --cached -In -E '(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' 2>/dev/null | grep -Ev "$SKIP" || true)
+[ -n "$hits" ] && report "疑似真实密钥（sk- / ghp_ / AKIA / 私钥块）" "$hits"
+
+# 3) API_KEY=真值（变量名不算，后面跟 16 位以上才算）
+hits=$(git grep --cached -In -E '(API_KEY|APIKEY|TOKEN|SECRET)\s*=\s*[A-Za-z0-9_\-]{16,}' 2>/dev/null | grep -Ev "$SKIP" || true)
+[ -n "$hits" ] && report "疑似把密钥值写真了（API_KEY=...）" "$hits"
+
+# 4) 内网地址 / 私有域（RFC1918 与 .internal；公开服务域名不算）
+hits=$(git grep --cached -In -E '(192\.168\.[0-9]+\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|[a-z0-9-]+\.internal)' 2>/dev/null \
+  | grep -Ev "$SKIP" | grep -v 'metadata\.google\.internal' || true)
+[ -n "$hits" ] && report "内网地址 / 私有域" "$hits"
+
+# 5) 本机绝对路径与 Windows 用户目录（最容易顺手带出去的个人信息）
+hits=$(git grep --cached -In -E '(/home/[a-z][a-z0-9_-]{2,}/|[A-Z]:\\Users\\|/[Uu]sers/[a-z][a-z0-9_-]{2,}/)' 2>/dev/null | grep -Ev "$SKIP" || true)
+[ -n "$hits" ] && report "本机绝对路径（含用户名）" "$hits"
+
+# 5b) 自定义禁词：本机私有文件，不进仓
+WORDS=".git/info/guard-words"
+if [ -f "$WORDS" ]; then
+  while IFS= read -r w; do
+    [ -z "$w" ] && continue
+    case "$w" in \#*) continue ;; esac
+    hits=$(git grep --cached -In --fixed-strings "$w" 2>/dev/null | grep -Ev "$SKIP" || true)
+    [ -n "$hits" ] && report "命中自定义禁词（$WORDS）" "$hits"
+  done < "$WORDS"
+fi
+
+# 6) 邮箱与手机号（noreply 与示例域不算）
+#    手机号要求前后不是数字：否则长数字串（时间戳/资源 id，例如 1790519134260）会被误判成手机号。
+hits=$(git grep --cached -In -E '([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$))' 2>/dev/null \
+  | grep -Ev "$SKIP" | grep -v 'users.noreply.github.com' | grep -v 'example.com' | grep -v '@types' || true)
+[ -n "$hits" ] && report "邮箱 / 手机号" "$hits"
+
+# 7) 内部口径与私有环境痕迹：这些词与路径一旦进公开仓就是泄密线索。
+#    模式用「分片拼接」写，免得钩子文件自己成为匹配源（钩子也在仓里，也要过公开性检查）。
+#    这一条**不跳过 tests/**：这些词在任何文件里都不该出现（与 1-6 条跳过测试夹具的理由不同）。
+J_SKIP="^scripts/git-hooks/"
+J_CODE_1="验""证机"                 # 内部验证环境代号（中文别名）
+J_CODE_2='\.''111''\b'             # 内网机器编号
+J_CODE_3="i7-""4720""HQ"           # 验证环境所用机器的 CPU 型号
+J_PATH_1="/app/""obsidian"         # 私有知识库目录
+J_PATH_2="~""/"".hermes"           # 本机 agent 私有目录
+J_PATH_3="hermes-""agent/"         # 上游项目本地克隆目录名
+hits=$(git grep --cached -In -E "$J_CODE_1|$J_CODE_2|$J_CODE_3|$J_PATH_1|$J_PATH_2|$J_PATH_3" 2>/dev/null \
+  | grep -Ev "$J_SKIP" || true)
+[ -n "$hits" ] && report "内部代号 / 内网编号 / 机器型号 / 私有路径" "$hits"
+
+# 7b) 仓库所有者本名：只允许出现在 LICENSE、ACKNOWLEDGEMENTS.md 与本仓自己的 GitHub URL 里
+J_NAME="Cham""pion""Lam"
+J_NAME_OK="github.com/Champion""Lam/CodeAgent"
+hits=$(git grep --cached -Iin -E "$J_NAME" 2>/dev/null | grep -Ev "$J_SKIP" \
+  | grep -v -F "$J_NAME_OK" | grep -Ev '^(LICENSE|ACKNOWLEDGEMENTS\.md):' || true)
+[ -n "$hits" ] && report "仓库所有者本名出现在不该出现的位置（只允许 LICENSE / ACKNOWLEDGEMENTS.md / 本仓自己的 GitHub URL）" "$hits"
+
+if [ "$fail" != "0" ]; then
+  echo "" >&2
+  echo "[guard] 提交已被拦下。确认是误报再放行：ALLOW_SECRETS=1 git commit ..." >&2
+  exit 1
+fi
+
+echo "[guard] ✓ 防泄密检查通过（密钥 / 内网地址 / 本人路径 / 自定义禁词 / 内部代号与私有路径 均无命中）" >&2
+exit 0

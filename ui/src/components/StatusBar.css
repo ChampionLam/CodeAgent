@@ -1,0 +1,122 @@
+.statusbar {
+  flex: 0 0 auto;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 12px;
+  background: var(--bg-statusbar);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  user-select: none;
+  overflow: hidden;
+}
+
+.statusbar__left,
+.statusbar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.statusbar__right { flex: 0 0 auto; }
+
+.statusbar__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  padding: 1px 7px 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.statusbar__state--idle { color: var(--text-tertiary); }
+.statusbar__state--busy { color: var(--accent-text); background: var(--accent-soft); }
+.statusbar__dot {
+  width: 5.5px; height: 5.5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+.statusbar__state--idle .statusbar__dot { background: var(--semantic-success); }
+
+.statusbar__sep {
+  width: 1px;
+  height: 13px;
+  background: var(--border-default);
+  flex: 0 0 auto;
+}
+
+.statusbar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.statusbar__label { color: var(--text-muted); }
+.statusbar__model {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.statusbar__num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: -0.2px;
+  display: inline-flex;
+  gap: 7px;
+}
+.statusbar__in { color: var(--accent-text); }
+.statusbar__out { color: var(--accent-text); }
+
+.statusbar__meter {
+  position: relative;
+  width: 84px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.statusbar__meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width var(--motion-slow), background var(--motion-base);
+}
+.statusbar__meter-fill--ok { background: linear-gradient(90deg, #10b981, #34d399); }
+.statusbar__meter-fill--warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.statusbar__meter-fill--danger { background: linear-gradient(90deg, #ef4444, #f87171); }
+
+.statusbar__pct {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.statusbar__pct--ok { color: var(--semantic-success); }
+.statusbar__pct--warn { color: var(--semantic-warn); background: var(--semantic-warn-soft); }
+.statusbar__pct--danger { color: var(--semantic-danger); background: var(--semantic-danger-soft); }
+
+.statusbar__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.statusbar__link:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+@media (max-width: 1080px) {
+  .statusbar__item .statusbar__label { display: none; }
+}
