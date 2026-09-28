@@ -14,6 +14,11 @@ License，Copyright (c) 2025 Nous Research）的 approval 思路，按我们的�
                删卷影副本、改注册表/引导、把远端内容直接喂给 shell）。
                命中问一次。
 
+**这是防手滑的 UX 护栏，不是安全边界。** 黑名单正则必然有绕过面（实测不拦：
+绝对路径 `/bin/rm`、`$IFS` 拆词、`X=rm; $X -rf /`、`xargs rm`、`find . -delete`、
+`python -c "shutil.rmtree(...)"`）。真正的边界在网络层（`web/egress.py`）与密钥
+治理（key 只走 `.env`），这一层不承诺。
+
 其余一律放行：任意目录读写文件、普通 shell、联网。联网的安全边界在
 ``web/egress.py``（私网拒绝 + DNS 钉死 + 跨站重定向重验 + 字节上限），不靠弹窗。
 

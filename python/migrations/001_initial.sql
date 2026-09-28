@@ -1,7 +1,7 @@
 -- 001_initial.sql
 -- Baseline schema for the session store (sessions.db).
--- Text is copied verbatim from the design doc (desktop-agent-app-design.md
--- section "SQLite table design"). Column names, types, and defaults must not
+-- Text follows the project's internal design doc (not part of this repo;
+-- its "SQLite table design" section). Column names, types, and defaults must not
 -- change: downstream code and the 004 migration build on this exact shape.
 CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
 CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), model TEXT NOT NULL, base_url TEXT, status TEXT NOT NULL DEFAULT 'active', total_input_tokens INTEGER NOT NULL DEFAULT 0, total_output_tokens INTEGER NOT NULL DEFAULT 0, total_cost_usd REAL NOT NULL DEFAULT 0);

@@ -4,7 +4,7 @@ This module owns exactly one job: turn (workspace, clock, skills, tools) into th
 system prompt string. It does no I/O, calls no model, and never decides policy.
 
 The shape follows the frozen design in the project's design archive
-("desktop-agent-app-design.md", lines 281-285 and 571-586):
+(the project's internal design doc; that doc is not part of this repo):
 
     system = base role
            + available skills   (name + description + when_to_use)

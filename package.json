@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:renderer",
     "build:renderer": "esbuild electron/renderer.ts --bundle --format=iife --target=chrome120 --outfile=electron/renderer.bundle.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
     "start": "npm run build && electron .",
     "test": "node --test --import tsx tests/*.test.ts",
     "sidecar:dev": "python3 python/sidecar.py"

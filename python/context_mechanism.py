@@ -1,4 +1,4 @@
-"""上下文机制 v1（docs/model-config-spec.md §7，方案 concepts/desktop-agent-context-mechanism-v1.md）。
+"""上下文机制 v1（docs/model-config-spec.md §7，方案来自项目内部设计文档，不在本仓）。
 
 核心立场：库（会话存储）是唯一事实源，上下文只是派生视图 —— 本模块
 只做**视图投影**，不物理丢弃任何消息：所有变换都返回新列表（messages

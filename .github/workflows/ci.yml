@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Python sidecar tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The suite is stdlib-only by design, so no pip install step is needed.
+      - name: Run unittest suite
+        run: python3 -m unittest discover -s tests -t tests -p "test_*.py"
+
+  node:
+    name: Node tests + typecheck + UI build
+    runs-on: ubuntu-latest
+    env:
+      # The TS tests never import electron itself; skipping the ~100MB binary
+      # download keeps the job fast.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22: `node --test` expands the `tests/*.test.ts` glob itself,
+          # which is what makes `npm test` work on Windows too (Node 20 does not).
+          node-version: "22"
+          cache: npm
+      - name: Install root deps
+        run: npm ci
+      - name: Run node tests
+        run: npm test
+      - name: Typecheck (app + tests, tsconfig.test.json)
+        run: npm run typecheck
+      - name: Build app (tsc + esbuild renderer)
+        run: npm run build
+      - name: Install UI deps
+        run: npm ci --prefix ui
+      - name: Build UI (tsc -b && vite build)
+        run: npm --prefix ui run build

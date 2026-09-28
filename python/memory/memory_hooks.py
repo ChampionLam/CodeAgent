@@ -1,6 +1,6 @@
 """Turn-boundary hooks for the memory engine (write side + read side).
 
-Design source: concepts/desktop-agent-memory-mechanism-v1.md (41-53):
+Design source: the project's internal design doc (not part of this repo):
   * write side  -- after a turn ends, enqueue it; a resident writer drains the
                    queue in the background, so a reply is never held up and a
                    turn itself costs zero extra LLM calls.

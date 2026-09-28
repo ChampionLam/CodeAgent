@@ -1,6 +1,6 @@
 """Mnemosyne engine client: MCP over stdio, running as its own process.
 
-Design source: concepts/desktop-agent-memory-mechanism-v1.md (19-81). The
+Design source: the project's internal design doc (not part of this repo). The
 engine runs in a separate process because its ONNX arena does not return
 memory to the OS once loaded (~97MB pinned in-process); as a child process it
 costs ~220MB while warm and returns all of it when reaped, at a 0.82s cold
