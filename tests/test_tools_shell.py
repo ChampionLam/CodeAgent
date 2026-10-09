@@ -85,9 +85,15 @@ class ShellRunTest(unittest.TestCase):
         self.assertIsInstance(T._decode_partial(raw), str)
         self.assertTrue(T._decode_partial(raw))
 
-    @unittest.skipIf(os.name == "nt", "POSIX printf")
     def test_real_command_emitting_non_utf8_output(self):
-        res = self.tool.run({"command": "printf '\\xc4\\xe3\\xba\\xc3'"}, workspace_root=self.ws)
+        # 跨平台跑：让解释器直接吐 GBK 字节（原来是 printf，因此在 Windows 上被跳过）。
+        # 但「命令输出非 UTF-8」恰恰是 Windows 控制台最常见的情况（GBK 码页），
+        # 在目标平台上跳过等于这块根本不覆盖（2026-09-28 真机复核发现）。
+        # 字节用 list 写死，命令里不含非 ASCII，避免命令行编码层干扰。
+        src = ("import sys; sys.stdout.buffer.write(bytes([0xc4, 0xe3, 0xba, 0xc3])); "
+               "sys.stdout.flush()")
+        res = self.tool.run({"command": '"%s" -c "%s"' % (sys.executable, src)},
+                            workspace_root=self.ws)
         self.assertTrue(res.ok)
 
 

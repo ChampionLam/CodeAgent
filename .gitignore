@@ -34,3 +34,16 @@ Thumbs.db
 # 构建产物（含 TS 增量编译缓存）
 *.tsbuildinfo
 ui/assets/
+
+# DecisionBert 判定模型产物（~97.7MB ONNX 等，部署时投放，绝不入库）。
+# 文件级忽略（2026-10-01 起）：只忽略大体积模型产物，serve.py / README.md
+# 这类纯代码/文档可正常跟踪。目录级 `python/models/` 会让 git 无法
+# re-include 其下文件，`!` 例外全部失效（实测 check-ignore 命中目录规则）。
+python/models/decision_bert/*.onnx
+python/models/decision_bert/*.onnx.data
+python/models/decision_bert/tokenizer.json
+python/models/decision_bert/vocab.txt
+python/models/decision_bert/calibrator*.json
+# 未来新增的其他模型目录：目录级兜底（本仓目前只有 decision_bert）
+python/models/*
+!python/models/decision_bert/

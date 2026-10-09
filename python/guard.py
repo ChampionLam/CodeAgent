@@ -19,6 +19,25 @@ License，Copyright (c) 2025 Nous Research）的 approval 思路，按我们的�
 `python -c "shutil.rmtree(...)"`）。真正的边界在网络层（`web/egress.py`）与密钥
 治理（key 只走 `.env`），这一层不承诺。
 
+第二层（模型提示层，2026-10-01 起）：正则放行的 run_shell 命令再过一次
+DecisionBert int8（子进程跑，见 guard_model.py），给校准后**弹卡概率** p。
+
+**极性（2026-10-01 核定，不许再反）**：p 是「弹卡概率」，**高 p = 危险**。
+  上游定义：noul = (action != allow)，即 action ∈ {ask, block} 记 1；
+  标签映射 ACTION_HINT = {0:"放行", 1:"弹卡"}，p>=0.5 判弹卡。实测：ls -la p=0.023（安全）、
+  rm -rf / p=0.944、find . -delete p=0.970。
+
+  p >= 0.85        → 弹卡（模型高置信危险，UI 可标「模型很确定」）
+  0.35 <= p < 0.85 → 弹卡（模型没把握，安全优先，照常弹卡）
+  p < 0.35         → 放行 + 记入未知池（回流用）
+
+两个参数可配：0.35 是默认弹卡门槛、0.85 是高置信标注线，从 config.json
+的 guard 段读（可覆盖），默认用上面两个数。
+**模型层给的是提示，不是硬闸门，最终决定权在人手里**：它不推翻正则层
+（正则命中 hardline/dangerous 时**根本不调模型**，直接弹卡、零附加延迟），
+模型层挂了（文件缺失/依赖没装/子进程起不来）则 fail-open 回纯正则 ——
+绝不因为模型挂了就让 agent 不能用。
+
 其余一律放行：任意目录读写文件、普通 shell、联网。联网的安全边界在
 ``web/egress.py``（私网拒绝 + DNS 钉死 + 跨站重定向重验 + 字节上限），不靠弹窗。
 
@@ -29,6 +48,7 @@ License，Copyright (c) 2025 Nous Research）的 approval 思路，按我们的�
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import NamedTuple
 
@@ -194,6 +214,253 @@ def judge_command(command: str) -> Verdict:
                 return Verdict(True, "dangerous", compiled.pattern, reason)
 
     return Verdict(False, "", "", "")
+
+
+# ---------------------------------------------------------------------------
+# 第二层：模型提示层（DecisionBert int8，子进程）。
+# 只对「正则放行的 run_shell 命令」生效；命中正则时根本走不到这里。
+# ---------------------------------------------------------------------------
+
+#: 模型层默认阈值（可由 config.json 的 guard 段覆盖，见 guard_model._read_thresholds）。
+#: **极性**：p 是弹卡概率，高 p = 危险（noul = action != allow，上游训练
+#: 定义；ls -la 实测 p=0.023，rm -rf / p=0.944）。两个阈值之上**都是弹卡**：
+MODEL_ASK_THRESHOLD = 0.35      # p >= 0.35 → 弹卡（默认门槛，安全优先）
+MODEL_CONFIDENT_THRESHOLD = 0.85  # p >= 0.85 → 弹卡且 UI 标「模型很确定」
+
+#: 懒加载的默认模型 client（serve.py 子进程）。缺文件/缺依赖时不可用，
+#: judge_command_layered 自动 fail-open 到纯正则。测试可注入假件。
+_default_model = None
+
+
+def _get_default_model():
+    """懒加载共享的单例 GuardModel；起不来就 None（纯正则）。"""
+    global _default_model
+    if _default_model is None:
+        try:
+            import guard_model
+            _default_model = guard_model.GuardModel()
+        except Exception:
+            return None
+    return _default_model
+
+
+def warmup(*, log=None) -> bool:
+    """启动预热（2026-10-01 冷启动静默 fail-open 修复）：后台线程调这个。
+
+    背景：机器刚开机/页缓存被挤掉时，第一条命令的模型层要付整段冷启动
+    （int8 冷缓存实测 4.26s、fp32 5.89s —— 后者曾超旧 5.0s 超时，
+    **一声不响地**降级回纯正则）。这个函数把冷启动挪到启动期：
+    spawn 共享单例 + 一条哑推理（``warmup ping``），不占关键路径。
+
+    接线（sidecar.main 启动处，默认开）：
+
+        threading.Thread(target=guard.warmup, daemon=True,
+                         kwargs={"log": sidecar.log}).start()
+
+    口径：**默认开**，但退化为静默无副作用 —— 模型层关了/缺文件/缺依赖/
+    预热本身炸了，都只返回 False 并最多记一条 warn（log 给了才有），
+    绝不影响启动、不留半起的子进程。关闭方法：
+      * 整层关：``DESK_GUARD_MODEL_LAYER=0`` 或 config.json guard 段
+        ``model_layer: false``（judge 回纯正则，warmup 直接跳过）；
+      * 只关预热：config.json guard 段 ``model_warmup: false``（模型层
+        照常工作，只是首条命令回到冷启动路径）。
+
+    log 传 None 时降级日志走 guard_model 默认的 stderr 行。
+    返回 True = 预热完成（模型层就绪）。
+    """
+    try:
+        import guard_model
+        if log is not None:
+            guard_model.set_log_hook(log)
+        if not model_layer_enabled():
+            return False
+        if not _warmup_enabled():
+            return False
+        model = _get_default_model()
+        if model is None:
+            return False
+        return model.warmup() is not None
+    except Exception:
+        return False
+
+
+def _warmup_enabled() -> bool:
+    """预热开关：config.json guard 段 ``model_warmup``（默认 true）。
+
+    与 model_layer_enabled 同一读法（无环境变量覆盖 —— 预热只是性能
+    优化，不配单独的 env 逃生口）。
+    """
+    try:
+        import appconfig
+        cfg = None
+        if hasattr(appconfig, "capability"):
+            cfg = appconfig.capability("guard", None)
+        if cfg is None and hasattr(appconfig, "section"):
+            cfg = appconfig.section("guard", None)
+        if isinstance(cfg, dict) and "model_warmup" in cfg:
+            return bool(cfg["model_warmup"])
+    except Exception:
+        pass
+    return True
+
+
+def _default_text_builder(tool: str, cwd: str, command: str) -> str:
+    """输入契约：与训练逐字一致（漂移只静默掉分不报错）。"""
+    return f"[工具] {tool} [目录] {cwd} [命令] {command}"
+
+
+def _model_action(p: float, thresholds: dict) -> str:
+    """p → block / block_confident / allow 三档。
+
+    **极性（不许反）**：p 是弹卡概率（noul = action != allow），高 p = 危险。
+    两个阈值之上都弹卡，区别只在 UI 标注（p >= 0.85 「模型很确定」）；
+    p < 0.35 才放行并记入未知池。旧版本曾把 p>=0.85 写成「高置信放行」，
+    方向完全反了（`find . -delete` p=0.970 会被放走）—— 已修正，勿回退。
+    """
+    if p >= thresholds["confident"]:
+        return "block_confident"
+    if p >= thresholds["ask"]:
+        return "block"
+    return "allow"
+
+
+def judge_command_layered(command: str, *, model=None,
+                          thresholds: dict | None = None,
+                          text_builder=None) -> Verdict:
+    """两段式判定：正则硬闸（第一层，原样）→ 模型提示层（第二层）。
+
+    分层口径（顺序不可反转）：
+      1. 正则命中 hardline/dangerous → **立刻返回原 Verdict，不调模型**，
+         零附加延迟；
+      2. 正则放行 → 只对 run_shell 命令跑一次模型推理得校准后弹卡概率 p
+         （高 p = 危险）：
+           p >= confident(0.85)     → 弹卡（模型高置信，UI 标「模型很确定」）
+           ask(0.35) <= p < conf    → 弹卡（模型没把握，安全优先）
+           p < ask                  → 放行 + 记入未知池回流
+      3. 模型层不可用（None / 抛异常）→ **fail-open 到纯正则**（放行）。
+
+    模型层给的是提示，不是硬闸门，最终决定权在人手里。
+    """
+    verdict = judge_command(command)
+    if verdict.requires_approval:
+        return verdict                      # 第一层命中：绝不调模型
+    text = str(command or "")
+    if not text.strip():
+        return verdict                      # 空命令：两层都无话可说
+
+    if model is None:
+        model = _get_default_model()
+        thresholds = thresholds or _model_thresholds()
+        text_builder = text_builder or _default_text_builder
+    if model is None:
+        return verdict                      # 模型层不可用 → 纯正则
+    thresholds = thresholds or {"ask": MODEL_ASK_THRESHOLD,
+                                "confident": MODEL_CONFIDENT_THRESHOLD}
+    text_builder = text_builder or _default_text_builder
+
+    try:
+        out = model.predict(text, text=text_builder(
+            "run_shell", "/home/user", text))
+    except TypeError:
+        # 假件/旧签名只有位置参数
+        out = model.predict(text)
+    except Exception:
+        return verdict                      # 模型层炸了 → fail-open
+    if not out:
+        return verdict                      # 不可用 / 回复坏 → fail-open
+
+    p = float(out.get("p", 0.0))
+    action = _model_action(p, thresholds)
+    if action == "block_confident":
+        return Verdict(True, "dangerous", "model-block",
+                       "模型提示层：校准弹卡概率 p=%.3f ≥ %.2f，模型高置信"
+                       "危险（模型很确定），建议弹卡确认"
+                       % (p, thresholds["confident"]))
+    if action == "block":
+        return Verdict(True, "dangerous", "model-block",
+                       "模型提示层：校准弹卡概率 p=%.3f 落在不确定带"
+                       "（%.2f–%.2f），模型没把握但安全优先，建议弹卡确认"
+                       % (p, thresholds["ask"], thresholds["confident"]))
+    return Verdict(False, "", "",
+                   "模型校准弹卡概率 p=%.3f < %.2f（放行，记入未知池回流）"
+                   % (p, thresholds["ask"]))
+
+
+def _model_thresholds() -> dict:
+    """从 config.json 的 guard 段读阈值，缺省用默认两档。
+
+    键名：guard.ask（默认 0.35，弹卡门槛）与 guard.confident（默认 0.85，
+    高置信标注线）。兼容旧键 model_ask_threshold / model_confident_threshold。
+    """
+    try:
+        import guard_model
+        return guard_model.threshold_values()
+    except Exception:
+        return {"ask": MODEL_ASK_THRESHOLD,
+                "confident": MODEL_CONFIDENT_THRESHOLD}
+
+
+def model_layer_enabled() -> bool:
+    """模型层总开关（2026-10-01，分层入口接线时加）。
+
+    读法与阈值同一口径：config.json 的 guard 段 `model_layer`
+    （兼容旧键 `layered`），可用环境变量 ``DESK_GUARD_MODEL_LAYER``
+    覆盖（取值 0/1、true/false、on/off、yes/no）。**默认开**。
+
+    关掉 = 一键回纯正则：judge_tool_layered 完全不碰 guard_model /
+    不起子进程，行为与旧 judge 一字不差。默认开且模型层缺文件/缺依赖
+    时自动 fail-open，所以这个开关只是逃生口，不是常态配置。
+    """
+    env = os.environ.get("DESK_GUARD_MODEL_LAYER", "").strip().lower()
+    if env:
+        return env not in ("0", "false", "off", "no")
+    try:
+        import appconfig
+        cfg = None
+        if hasattr(appconfig, "capability"):
+            cfg = appconfig.capability("guard", None)
+        if cfg is None and hasattr(appconfig, "section"):
+            cfg = appconfig.section("guard", None)
+        if isinstance(cfg, dict):
+            for key in ("model_layer", "layered"):
+                if key in cfg:
+                    return bool(cfg[key])
+    except Exception:
+        pass
+    return True
+
+
+def judge_tool_layered(tool_name: str, args: dict | None) -> Verdict:
+    """工具级分层判定（agent_loop 的 default_deps.judge 接这里）。
+
+    与 judge() 的唯一差别：run_shell 且正则放行的命令再过一次
+    judge_command_layered（模型提示层）。其余工具（delete_path /
+    读写文件 / 其他）**判定路径与 judge() 一字不差**——模型层只作用
+    于 run_shell 且正则放行的命令，绝不扩大面。
+
+    开关（model_layer_enabled，默认开）关掉时，这里就是纯 judge()。
+    """
+    if not model_layer_enabled():
+        return judge(tool_name, args)
+    if tool_name != "run_shell":
+        return judge(tool_name, args)
+    return judge_command_layered(_shell_command(args))
+
+
+def _shell_command(args: dict | None) -> str:
+    """从 run_shell 的 args 里取命令文本（与 judge() 同一取法）。"""
+    args = args or {}
+    for key in ("command", "cmd", "script"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def layered_verdict_p(verdict: Verdict) -> float | None:
+    """从 layered 判定的 reason 里取回模型 p（展示/审计用）。"""
+    m = re.search(r"p=([0-9.]+)", verdict.reason or "")
+    return float(m.group(1)) if m else None
 
 
 #: 删路径时的保护位置：盘根 / 系统根 / 家目录顶层的直接子目录 —— 删了多半回不来

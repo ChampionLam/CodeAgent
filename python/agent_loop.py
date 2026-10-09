@@ -162,7 +162,12 @@ def default_deps(*, llm_stream=None, request_approval=None, **overrides) -> Loop
         "request_approval": request_approval or (lambda _payload: "deny"),
         "load_model_config": llm.load_config,
         "exec_tool": lambda name, args, ws: tools.execute(name, args, workspace_root=ws),
-        "judge": guard_mod.judge,
+        # 分层判定（2026-10-01 起）：judge_tool_layered = 正则硬闸 +
+        # DecisionBert 模型提示层。默认开；config.json guard 段
+        # model_layer=false 或环境变量 DESK_GUARD_MODEL_LAYER=0 一键回
+        # guard.judge（纯正则）。模型文件/依赖缺失时自动 fail-open
+        # 回纯正则，不报错、不卡启动（见 guard.judge_tool_layered）。
+        "judge": guard_mod.judge_tool_layered,
         "audit": None,
         "is_cancelled": lambda: False,
         "tool_schemas": tools.schemas,

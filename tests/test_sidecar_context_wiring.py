@@ -21,9 +21,12 @@ class SpillDirTest(unittest.TestCase):
     def test_spill_sits_next_to_the_workspace(self):
         # POSIX-portable: os.path.abspath would prepend the cwd to "E:/..."
         # on Linux, so exercise the sibling rule with a normal absolute path.
-        root = os.path.join(os.sep, "cache", "userdata", "workspace")
+        root = os.path.join(os.path.abspath(os.sep), "cache", "userdata", "workspace")
         d = sidecar._spill_dir(root)
-        self.assertEqual(d, os.path.join(os.sep, "cache", "userdata", "spill"))
+        # 期望值从 root 派生，别硬编码 —— 用 os.sep 拼出来的 \\cache\\... 不是绝对路径，
+        # Windows 下会被 abspath 按当前盘符改写成 D:\\cache\\...，断言就永远对不上
+        # （2026-09-28 Windows 真机实测）。
+        self.assertEqual(d, os.path.join(os.path.dirname(root), "spill"))
 
     def test_spill_falls_back_when_root_is_empty(self):
         self.assertTrue(sidecar._spill_dir("").endswith("spill"))

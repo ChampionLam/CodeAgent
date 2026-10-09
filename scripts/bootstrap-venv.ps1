@@ -70,6 +70,26 @@ foreach ($req in @("python\requirements.txt", "python\requirements-docs.txt")) {
     if ($LASTEXITCODE -ne 0) { throw "[bootstrap] pip failed on $req" }
 }
 
+# Guard model layer (second guard layer, DecisionBert int8) is OPTIONAL:
+# a failed install only warns and continues -- it must never take down the
+# whole bootstrap. Without it guard degrades to regex-only (fail-open) and
+# the sidecar still starts. Different contract from the docs layer above
+# (docs are required at deploy time; the model layer is not).
+$guardReq = Join-Path $Root "python\requirements-guard.txt"
+if (-not (Test-Path $guardReq)) {
+    Write-Warning "[bootstrap] optional guard-model requirements missing: $guardReq (skipped)"
+} else {
+    Write-Host "[bootstrap] installing (optional) requirements-guard.txt"
+    if ($IndexUrl) {
+        & $py -m pip install -i $IndexUrl -r $guardReq
+    } else {
+        & $py -m pip install -r $guardReq
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "[bootstrap] requirements-guard.txt install failed -- guard model layer degrades to regex-only (fail-open); bootstrap continues"
+    }
+}
+
 Write-Host "[bootstrap] self-check"
 & $py -c @"
 import sys

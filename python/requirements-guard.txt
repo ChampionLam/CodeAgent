@@ -1,0 +1,19 @@
+# desk-agent 判定模型层（DecisionBert int8）—— 可选依赖
+#
+# guard 的第二层（模型提示层）用 onnxruntime 跑 DecisionBert int8、
+# tokenizers 加载 BERT 中文 tokenizer。本层与 requirements-docs.txt 同一
+# 口径：「可选」只表示缺了不影响进程启动 —— 不表示可以不装。
+#
+# 没装时 guard 自动降级为纯正则（fail-open），sidecar 照常起；装了但模型
+# 文件没投放（python/models/decision_bert/ 为空）也一样降级，不报错。
+# 部署时由 scripts/bootstrap-venv.* 一起装齐。
+#
+# 模型文件（~97.7MB ONNX）不入 git 仓库：部署时人工投放到
+# python/models/decision_bert/（见 python/guard_model.py 模块头）。
+#
+# 实测可装组合（Python 3.11, manylinux）:
+#   onnxruntime==1.30.0  tokenizers==0.23.2
+
+onnxruntime>=1.27.0
+tokenizers>=0.23.1
+numpy>=1.26

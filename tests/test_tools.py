@@ -55,9 +55,20 @@ class ToolsTestBase(unittest.TestCase):
     def write_ws(self, rel: str, content: str = "") -> str:
         full = os.path.join(self.ws, rel)
         os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, "w", encoding="utf-8") as fh:
+        # newline=""：fixture 必须逐字节一致。默认在 Windows 上会把 "\n" 翻成 "\r\n"，
+        # 字节数断言（如 bytes == 17）就必然失败（2026-09-28 Windows 真机实测）。
+        with open(full, "w", encoding="utf-8", newline="") as fh:
             fh.write(content)
         return full
+
+    def py(self, src: str) -> str:
+        """一条在 cmd.exe 与 /bin/sh 下都能跑的命令。
+
+        run_shell 在 Windows 走 cmd /c、在 POSIX 走 /bin/sh，printf / pwd / sleep /
+        python3 这些不是两边都有（Windows 实测 9009 = command not found）。用当前解释器
+        的绝对路径 + 单引号包 Python 字符串，两种 shell 的原样传递性最好。
+        """
+        return '"%s" -c "%s"' % (sys.executable, src)
 
     def run_ok(self, name: str, args: dict) -> ToolResult:
         result = tools.execute(name, args, workspace_root=self.ws)
@@ -329,7 +340,8 @@ class TestWriteFile(ToolsTestBase):
 class TestRunShell(ToolsTestBase):
 
     def test_success_returns_stdout_stderr(self) -> None:
-        result = self.run_ok("run_shell", {"command": "printf OUT; printf ERR >&2"})
+        result = self.run_ok("run_shell", {"command": self.py(
+            "import sys; sys.stdout.write('OUT'); sys.stderr.write('ERR')")})
         self.assertEqual(result.data["stdout"], "OUT")
         self.assertEqual(result.data["stderr"], "ERR")
         self.assertEqual(result.data["returncode"], 0)
@@ -337,21 +349,23 @@ class TestRunShell(ToolsTestBase):
         self.assertIn("ERR", result.content)
 
     def test_cwd_is_workspace_root(self) -> None:
-        result = self.run_ok("run_shell", {"command": "pwd"})
+        result = self.run_ok("run_shell", {"command": self.py("import os; print(os.getcwd())")})
         # realpath 防 /tmp → /private/tmp 之类的符号链接差异
         self.assertEqual(os.path.realpath(result.data["stdout"].strip()),
                          os.path.realpath(self.ws))
 
     def test_cwd_falls_back_when_workspace_empty(self) -> None:
         before = os.getcwd()
-        result = tools.execute("run_shell", {"command": "pwd"}, workspace_root="")
+        result = tools.execute("run_shell", {"command": self.py("import os; print(os.getcwd())")},
+                               workspace_root="")
         self.assertTrue(result.ok)
         # workspace_root 为空 → cwd 退回当前目录
         self.assertEqual(os.path.realpath(result.data["stdout"].strip()),
                          os.path.realpath(before))
 
     def test_nonzero_exit_still_returns_outputs(self) -> None:
-        result = tools.execute("run_shell", {"command": "printf PARTIAL_OUT; printf BOOM_ERR >&2; exit 3"},
+        result = tools.execute("run_shell", {"command": self.py(
+            "import sys; sys.stdout.write('PARTIAL_OUT'); sys.stderr.write('BOOM_ERR'); sys.exit(3)")},
                                workspace_root=self.ws)
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "NONZERO_EXIT")
@@ -366,7 +380,8 @@ class TestRunShell(ToolsTestBase):
     def test_timeout_returns_partial_output(self) -> None:
         result = tools.execute(
             "run_shell",
-            {"command": "printf BEFORE_TIMEOUT; sleep 5", "timeout_seconds": 1},
+            {"command": self.py("import sys, time; sys.stdout.write('BEFORE_TIMEOUT'); "
+                                "sys.stdout.flush(); time.sleep(5)"), "timeout_seconds": 1},
             workspace_root=self.ws)
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "TIMEOUT")
@@ -377,13 +392,14 @@ class TestRunShell(ToolsTestBase):
     def test_timeout_partial_stderr_too(self) -> None:
         result = tools.execute(
             "run_shell",
-            {"command": "printf E1 >&2; sleep 5", "timeout_seconds": 1},
+            {"command": self.py("import sys, time; sys.stderr.write('E1'); "
+                                "sys.stderr.flush(); time.sleep(5)"), "timeout_seconds": 1},
             workspace_root=self.ws)
         self.assertEqual(result.error_code, "TIMEOUT")
         self.assertIn("E1", result.data["stderr"])
 
     def test_stdout_truncated_at_20000_chars(self) -> None:
-        result = self.run_ok("run_shell", {"command": "python3 -c \"print('A' * 30000)\""})
+        result = self.run_ok("run_shell", {"command": self.py("print('A' * 30000)")})
         self.assertEqual(len(result.data["stdout"]), 20000)
         self.assertTrue(result.data.get("stdout_truncated"))
         self.assertTrue(result.data["stdout"].startswith("AAAA"))
@@ -391,7 +407,7 @@ class TestRunShell(ToolsTestBase):
     def test_stderr_truncated_at_20000_chars(self) -> None:
         result = tools.execute(
             "run_shell",
-            {"command": "python3 -c \"import sys; sys.stderr.write('B' * 30000)\"; exit 1"},
+            {"command": self.py("import sys; sys.stderr.write('B' * 30000); sys.exit(1)")},
             workspace_root=self.ws)
         self.assertEqual(len(result.data["stderr"]), 20000)
         self.assertTrue(result.data.get("stderr_truncated"))

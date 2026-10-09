@@ -36,6 +36,21 @@ class HistoryWireTest(unittest.TestCase):
         sidecar._SESSIONS = None
 
     def tearDown(self):
+        # Windows: 连接还开着就删临时目录会 WinError 32（Linux 能边开边删，暴露不出来）。
+        tmp = os.path.normcase(os.path.abspath(self._tmp.name))
+        for _attr in ("_SESSIONS", "_AUDIT"):
+            store = getattr(sidecar, _attr, None)
+            db = getattr(store, "db_path", None)
+            if not isinstance(db, str):
+                continue
+            if not os.path.normcase(os.path.abspath(db)).startswith(tmp):
+                continue
+            close = getattr(store, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
         sidecar._SESSIONS = self._old_store
         sidecar._DATA_DIR = self._old_dir
         self._tmp.cleanup()

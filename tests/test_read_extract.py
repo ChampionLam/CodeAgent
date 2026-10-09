@@ -28,7 +28,31 @@ import ocr_fallback  # noqa: E402
 import read_extract  # noqa: E402
 import tools  # noqa: E402
 
-CJK_FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+def _cjk_font() -> str:
+    """找一份系统里真实存在的 CJK 字体（生成 PDF 里嵌中文用）。
+
+    原来写死 /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc —— Windows 上那个路径
+    必然不存在，于是 5 条 PDF 用例被静默跳过（2026-09-28 Windows 真机实测），而跳过理由
+    「缺 pymupdf/字体」把两件事混成一句，会把人往"依赖没装"上带（实战里就误判过一次）。
+    现在按平台候选列表找，也允许用 DESK_TEST_CJK_FONT 显式指定。
+    """
+    candidates = [
+        os.environ.get("DESK_TEST_CJK_FONT", ""),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",   # Linux
+        r"C:\Windows\Fonts\msyh.ttc",                            # Windows: 微软雅黑
+        r"C:\Windows\Fonts\msyhbd.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",                          # 黑体
+        r"C:\Windows\Fonts\simsun.ttc",                          # 宋体
+        "/System/Library/Fonts/PingFang.ttc",                    # macOS
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    # 一个都没有：返回原常量，让既有的 skipUnless 照旧跳过（不要假装字体存在）
+    return "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+
+
+CJK_FONT = _cjk_font()
 PHRASE = "通天河副本攻略"
 SCAN_PHRASE = "扫描件正文（图片里的字）"
 
@@ -437,7 +461,7 @@ if __name__ == "__main__":
     unittest.main()
 
 class OcrThinkingStripTests(unittest.TestCase):
-    """本地 OCR 绝不能把模型的思考块写进正文（.5 真机抓到过）。"""
+    """本地 OCR 绝不能把模型的思考块写进正文（真机实测抓到过）。"""
 
     def test_strips_closed_thinking_block(self):
         from ocr_fallback import _strip_thinking
@@ -469,7 +493,11 @@ def _scanned_pdf(pages: int):
     for i in range(pages):
         page = doc.new_page(width=200, height=200)
         page.draw_rect(fitz.Rect(20, 20, 120, 120), color=(0, 0, 1), fill=(0, 0, 1))
-    path = tempfile.mkstemp(suffix=".pdf")[1]
+    # mkstemp 返回 (fd, path)：fd 必须关掉。Windows 上句柄还开着，
+    # pymupdf 的 save 替换不了这个文件（实测 code=2: cannot remove file ... Permission denied），
+    # Linux 则完全看不出来。
+    fd, path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
     doc.save(path)
     doc.close()
     return path
@@ -692,9 +720,10 @@ class TextFileTest(DocCase):
         ref = store.save_file(path)
         self.assertEqual(ref.original_name, "app.log")
         self.assertTrue(ref.is_document)
+        with open(path, "rb") as fh:
+            blob = fh.read()
         self.assertIn("boot ok",
-                      read_extract.extract_document_bytes(
-                          open(path, "rb").read(), "app.log"))
+                      read_extract.extract_document_bytes(blob, "app.log"))
 
     def test_read_file_gate_unchanged(self) -> None:
         """回归护栏：纯文本不许进 read_file 的提取闸门（否则输出形态改了）。"""

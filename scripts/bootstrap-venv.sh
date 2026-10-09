@@ -34,6 +34,25 @@ for req in "$ROOT/python/requirements.txt" "$ROOT/python/requirements-docs.txt";
   fi
 done
 
+# 模型层（guard 第二层，DecisionBert int8）是可选层：装失败只警告并继续，
+# 不许拖垮整个 bootstrap —— 缺了它 guard 自动降级为纯正则（fail-open），
+# sidecar 照常起。这与上面的文档层口径不同（文档层部署时必须装齐）。
+GUARD_REQ="$ROOT/python/requirements-guard.txt"
+if [ ! -f "$GUARD_REQ" ]; then
+  echo "[bootstrap] warn: optional guard-model requirements missing: $GUARD_REQ (skipped)" >&2
+else
+  echo "[bootstrap] installing (optional) requirements-guard.txt"
+  if [ -n "$INDEX_URL" ]; then
+    if ! "$PY" -m pip install -i "$INDEX_URL" -r "$GUARD_REQ"; then
+      echo "[bootstrap] warn: requirements-guard.txt install failed -- guard model layer degrades to regex-only (fail-open); bootstrap continues" >&2
+    fi
+  else
+    if ! "$PY" -m pip install -r "$GUARD_REQ"; then
+      echo "[bootstrap] warn: requirements-guard.txt install failed -- guard model layer degrades to regex-only (fail-open); bootstrap continues" >&2
+    fi
+  fi
+fi
+
 echo "[bootstrap] self-check"
 "$PY" - <<'PYEOF'
 import sys

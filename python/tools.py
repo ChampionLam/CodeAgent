@@ -529,11 +529,34 @@ class EditFileTool(Tool):
         old_bytes = old_string.encode("utf-8")
         new_bytes = new_string.encode("utf-8")
         count = raw.count(old_bytes)
+        # Windows fallback: an old_string typed with "\n" can never match a file
+        # whose lines end with "\r\n" (and the reverse). Retry against a
+        # normalized copy -- but only when the file uses ONE ending
+        # consistently, so a file with mixed endings is never rewritten wholesale.
+        norm = None
+        needle = repl = b""
+        restore_crlf = False
         if count == 0:
+            crlf_pairs = raw.count(b"\r\n")
+            lone_lf = raw.count(b"\n") - crlf_pairs
+            if crlf_pairs and not lone_lf and b"\r\n" not in old_bytes:
+                norm = raw.replace(b"\r\n", b"\n")
+                needle, repl, restore_crlf = old_bytes, new_bytes, True
+            elif not crlf_pairs and b"\r\n" in old_bytes:
+                norm = raw
+                needle = old_bytes.replace(b"\r\n", b"\n")
+                repl = new_bytes.replace(b"\r\n", b"\n")
+            if norm is not None:
+                count = norm.count(needle)
+        if count == 0:
+            hint = ""
+            if raw.count(b"\r\n"):
+                hint = (" (note: this file uses CRLF line endings -- do not put "
+                        "\r in old_string)")
             return _fail(
                 "NOT_FOUND",
                 "edit_file: old_string not found in %s; the file was not changed. "
-                "Check the exact spelling and whitespace" % target)
+                "Check the exact spelling and whitespace%s" % (target, hint))
         if count > 1 and not replace_all:
             return _fail(
                 "BAD_REQUEST",
@@ -542,7 +565,14 @@ class EditFileTool(Tool):
                 "replace_all=true to replace all of them, or use write_file to "
                 "replace the whole file" % (count, target))
 
-        updated = raw.replace(old_bytes, new_bytes, -1 if replace_all else 1)
+        if norm is None:
+            updated = raw.replace(old_bytes, new_bytes, -1 if replace_all else 1)
+        else:
+            updated = norm.replace(needle, repl, -1 if replace_all else 1)
+            if restore_crlf:
+                # Put the file's own convention back: every "\n" in the result
+                # is one of the file's original line endings.
+                updated = updated.replace(b"\n", b"\r\n")
         try:
             with open(target, "wb") as fh:
                 fh.write(updated)

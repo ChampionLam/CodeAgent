@@ -46,12 +46,15 @@ class FsToolsTestBase(unittest.TestCase):
         shutil.rmtree(self.ws, ignore_errors=True)
 
     # ---- helpers -------------------------------------------------------
-    def write_ws(self, rel: str, content: str = "") -> str:
+    def write_ws(self, rel: str, content: str = "", newline: str = "") -> str:
         full = os.path.join(self.ws, rel)
         parent = os.path.dirname(full)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(full, "w", encoding="utf-8") as fh:
+        # newline="" keeps fixtures byte-exact on every platform: the default
+        # would translate "\n" -> "\r\n" on Windows and break byte-count asserts.
+        # Tests that need the other convention pass newline="\r\n" explicitly.
+        with open(full, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(content)
         return full
 
@@ -217,6 +220,33 @@ class TestEditFile(FsToolsTestBase):
         self.assertEqual(result.data["occurrences"], 1)
         self.assertEqual(result.data["bytes_before"], 23)
         self.assertEqual(result.data["bytes_after"], 23)
+
+    def test_matches_a_crlf_file_and_keeps_crlf(self) -> None:
+        """Windows 真机实测的 gap：文件是 CRLF 时，用 "\\n" 写的多行 old_string
+        以前直接 NOT_FOUND。现在既要匹配上，又要保留文件自己的 CRLF 约定。"""
+        path = self.write_ws("crlf.txt", "alpha\nbeta\ngamma\n", newline="\r\n")
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), b"alpha\r\nbeta\r\ngamma\r\n")
+        result = self.run_ok("edit_file", {"path": path,
+                                           "old_string": "alpha\nbeta",
+                                           "new_string": "alpha\nBETA"})
+        self.assertEqual(result.data["occurrences"], 1)
+        self.assertEqual(result.data["bytes_before"], 20)
+        with open(path, "rb") as fh:
+            after = fh.read()
+        self.assertEqual(after, b"alpha\r\nBETA\r\ngamma\r\n")
+        self.assertEqual(result.data["bytes_after"], len(after))
+
+    def test_accepts_an_old_string_that_carries_crlf(self) -> None:
+        """反向：文件是 LF，而 old_string 里带了 \\r\\n —— 也要匹配，并按文件
+        自己的 LF 约定写回，不许把 CRLF 带进一个 LF 文件。"""
+        path = self.write_ws("lf.txt", "one\ntwo\n")
+        result = self.run_ok("edit_file", {"path": path,
+                                           "old_string": "one\r\ntwo",
+                                           "new_string": "one\r\nTWO"})
+        self.assertEqual(result.data["occurrences"], 1)
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), b"one\nTWO\n")
 
     def test_relative_path_anchors_to_workspace(self) -> None:
         self.write_ws("rel.txt", "aa bb cc\n")

@@ -40,65 +40,68 @@ Python sidecar (python/)             ← agent 循环、工具执行、技能、
 | `ui/` | 界面源码（React + Vite）。构建产物拷进 `electron/ui/` 由应用加载 |
 | `resources/skills/` | 内置技能 |
 | `docs/` | 设计文档（子代理规格、权限、技能与工具、模型配置契约…） |
-| `tests/` | 73 个测试文件（65 个 Python unittest + 8 个 Node 原生 test） |
+| `tests/` | 75 个测试文件（67 个 Python unittest + 8 个 Node 原生 test） |
 | `scripts/` | 冒烟脚本 |
 
-## 快速开始
+## 快速开始（Windows）
 
-依赖：**Node ≥ 20**（`npm test` 建议 **Node ≥ 22**，见下）、**Python ≥ 3.10**（sidecar 的图片 / 文档 / 纯文本读取要装依赖，见第 2 步）。
+**目标平台是 Windows**（开发与验证都在 Windows 上做），所以快速开始以 PowerShell 为准。Linux / macOS 用来改代码、跑测试，见下一节。
 
-```bash
+依赖：**Node ≥ 20**（`npm test` 要 **Node ≥ 22**）、**Python ≥ 3.10**。
+
+```powershell
 # 1) 应用依赖
 npm install
 
 # 2) sidecar 依赖（图片 + 文档提取 + 纯文本 + OCR 兜底）—— 一条命令装齐
-#    Windows：
+#    建 python\.venv，装上 requirements.txt 与 requirements-docs.txt，末尾自检
+#    并列出 Pillow / anydoc / pymupdf / pypdf / openpyxl / python-docx 装没装。
+#    意义：PDF / Word / Excel / PPT / CSV 是**功能自带**能力，部署时就该可用，
+#    不该等用户拖进来才发现库没装。
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap-venv.ps1
-#    Linux / macOS：
-bash scripts/bootstrap-venv.sh
-#    脚本会建 python/.venv，并把 requirements.txt 与 requirements-docs.txt 一起装上，
-#    末尾自检并列出 Pillow / anydoc / pymupdf / pypdf / openpyxl / python-docx 的装没装。
-#    意义：PDF / Word / Excel / PPT / CSV 这些是**功能自带**能力，部署时就该可用，
-#    不该等到用户拖进来才发现库没装。
+#    国内网络装 anydoc 的 Rust 轮子慢，可临时换源（只作用于当次，不改机器 pip 配置）：
+#    powershell -ExecutionPolicy Bypass -File scripts\bootstrap-venv.ps1 -IndexUrl https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 3) 构建界面（产物要落到 electron/ui/，应用从那里加载）
-cd ui && npm install && npm run build && cd ..
-rm -rf electron/ui && mkdir -p electron/ui && cp -r ui/dist/* electron/ui/
-
-# 4) 配置：拷一份空白模板，再填你自己的模型与密钥
-cp config.example.json config.json
-#   · config.example.json 是**空白模板**（模型/端点都留空）——用谁家的模型由你决定，
-#     启动后在界面「设置 → 添加模型」里选对接方式即可，也可以直接编辑 config.json。
-#   · 密钥值只写 .env（变量名与 config.json 里的 apiKeyEnv 对应），别写进 config.json：
-printf 'OPENAI_API_KEY=...\n' > .env
-
-# 5) 跑起来
-npm start
-```
-
-Windows（PowerShell）—— 第 1、2 步上面已给了两个平台各自的命令，第 3、4 步换成：
-
-```powershell
-# 3) 构建界面 + 落 electron/ui/，并顺带拷好 config.json 与空白 .env
+# 3) 构建界面（产物落到 electron\ui\，应用从那里加载）+ 顺带拷好 config.json 与空白 .env
 powershell -ExecutionPolicy Bypass -File scripts\build-ui.ps1
 
-# 4) 把 key 填进 .env（脚本已写好空白模板）
+# 4) 填密钥（值只写 .env；变量名与 config.json 里的 apiKeyEnv 对应，别写进 config.json）
 notepad .env
-#    .env 必须是 UTF-8 **不带 BOM**：PowerShell 5.1 的 `>` 会写成 UTF-16，
-#    应用读不出来。build-ui.ps1 用 [IO.File]::WriteAllText + UTF8Encoding($false) 写。
+#    .env 必须是 UTF-8 **不带 BOM**：PowerShell 5.1 的 `>` 会写成 UTF-16，应用读不出来。
+#    build-ui.ps1 用 [IO.File]::WriteAllText + UTF8Encoding($false) 写，别手工重定向覆盖它。
 
 # 5) 跑起来
 npm start
 ```
 
-> PowerShell 下不用管通配符：`npm test` 里的 `tests/*.test.ts` 由 node 自己展开（`--test` 从 Node 21 起直接认 glob），实测 Node 22 上把通配符原样传入也能跑满 99 条；Node 20 上请用 POSIX shell 或升级 node。CI 目前跑在 Linux 上（Python 测试 / Node 测试 / typecheck / UI 构建，见 `.github/workflows/ci.yml`），Windows 侧还没进 CI。
+`config.example.json` 是**空白模板**（模型/端点都留空）——用谁家的模型由你决定：启动后在界面「设置 → 添加模型」里选对接方式即可，也可以直接编辑 `config.json`。
 
-测试：
+## 快速开始（Linux / macOS）
+
+只用于改代码、跑测试；不是发布目标。
 
 ```bash
-npm test                                        # TS 侧
-python3 -m unittest discover -s tests -t tests -p "test_*.py"   # Python 侧（1175 个用例）
+npm install
+bash scripts/bootstrap-venv.sh
+cd ui && npm install && npm run build && cd ..
+rm -rf electron/ui && mkdir -p electron/ui && cp -r ui/dist/* electron/ui/
+cp config.example.json config.json && printf 'OPENAI_API_KEY=...\n' > .env
+npm start
 ```
+
+## 测试
+
+```powershell
+npm test                                                       # TS 侧（99 条）
+python -m unittest discover -s tests -t tests -p "test_*.py"    # Python 侧（1219 条）
+```
+
+Linux / macOS 上把 `python` 换成 `python3`。
+
+本仓当前实测（Linux / Python 3.11，`python/requirements.txt` + `requirements-docs.txt` + `requirements-guard.txt` 三份装齐）：Python 全量 **1219 条 OK**（跳过 2 条专门的 Windows 探测用例——反过来 Windows 上跳过的是那 2 条符号链接用例，建符号链接要管理员权限）、TS **99 条全过**、`npm run typecheck` 与 `npm run build` 退出码 0。
+
+> PowerShell 下不用管通配符：`npm test` 里的 `tests/*.test.ts` 由 node 自己展开（`--test` 从 Node 21 起认 glob）；Node 20 上请用 POSIX shell 或升级 node。
+> CI 目前只在 Linux 上跑（Python 测试 / Node 测试 / typecheck / UI 构建，见 `.github/workflows/ci.yml`），**Windows 侧还没进 CI**——Windows 上的数字要在真机上手工跑（上述条数是本仓在 Linux 上跑出来的，未代填 Windows 数字）。
 
 ## 配置说明
 
@@ -111,6 +114,7 @@ python3 -m unittest discover -s tests -t tests -p "test_*.py"   # Python 侧（1
 
 - **命令审批是防手滑的 UX 护栏，不是安全边界。** `python/guard.py` 是黑名单正则（要求命令名落在命令位上），必然有绕过面：`/bin/rm -rf /`、`rm$IFS-rf$IFS/`、`X=rm; $X -rf /`、`xargs rm`、`find . -delete`、`python -c "import shutil; shutil.rmtree('/')"` 都不会被拦（这些是实测结论，不是推测）。它拦的是**手滑**，不是恶意。
 - 真正的安全边界在**网络层**（`python/web/egress.py`：私网拒绝、DNS 钉死、跨站重定向重验、字节上限）与**密钥治理**（key 只走 `.env`，界面不回读、不显示、不入日志）。
+- **第二层（可选）：本地判定模型提示层。** 正则放行的 `run_shell` 命令会再过一次本地小模型（DecisionBert int8，跑在独立子进程里，空闲后自动收回内存），它给的只是「要不要问用户」的提示概率，不是硬闸门。模型文件约 97.7 MiB **不进仓库**，要自己投放到 `python/models/decision_bert/`（投放说明与模型卡见 `docs/decision-bert-model.md`）；文件没投放、依赖缺失或推理超时都会**静默降级为纯正则**，不影响 agent 可用性。
 - agent 以**你当前用户的权限**运行：没有容器 / 沙箱隔离，也没有权限分级与工作区概念。第一次运行前请想清楚这一点。
 - 普通操作（任意目录读写、跑普通 shell、联网）不逐次弹审批；只有 `guard.py` 判为危险模式的命令才会在会话里出审批卡片，且没有「总是允许」。
 

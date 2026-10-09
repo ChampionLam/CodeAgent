@@ -1690,6 +1690,20 @@ def main() -> int:
     except Exception as e:  # pragma: no cover - 配置读不出来
         log("WARN", "tools disabled loading failed: %s" % (e,))
 
+    # guard 模型层预热（2026-10-01 冷启动修复）：后台线程 spawn DecisionBert
+    # 子进程 + 一条哑推理，把冷启动的几秒从第一条真实命令挪到启动期。
+    # 默认开（config.json guard 段 model_warmup=false 只关预热；整层关用
+    # guard.model_layer 的 DESK_GUARD_MODEL_LAYER=0 / model_layer=false）。
+    # 出错只降级：warmup 内部吞掉一切异常，失败时模型层照常 fail-open，
+    # 绝不挡 hello 帧与主循环。
+    try:
+        import guard as guard_mod
+        threading.Thread(target=guard_mod.warmup, daemon=True,
+                         name="guard-model-warmup",
+                         kwargs={"log": log}).start()
+    except Exception as e:  # pragma: no cover - 预热接线失败不影响启动
+        log("WARN", "guard model warmup not started: %s" % (e,))
+
     # Hello is an *unsolicited* event and must go out before we read anything:
     # the client gates every request behind it (45s budget, "sidecar not ready:
     # starting" until it lands). Blocking on the client's first frame here
@@ -2138,7 +2152,10 @@ def _run_chat(req_id, params) -> None:
     # it to the resolved ModelConfig so the whole loop (image gate included)
     # sees the selected model. The legacy `model` param still overrides the
     # model NAME only, on top of whichever config is active.
-    # （2026-09-25 起 judge 已由 default_deps 接到 guard.judge，不再读规则表。）
+    # （2026-09-25 起 judge 由 default_deps 接到 guard 分层入口，不再读规则表；
+    # 2026-10-01 起默认走 guard.judge_tool_layered：正则硬闸 + DecisionBert
+    # 模型提示层，缺模型/缺依赖自动降级纯正则，config guard.model_layer
+    # 或 DESK_GUARD_MODEL_LAYER 可整体关掉。）
 
     if resolved_cfg is not None:
         deps.load_model_config = lambda: resolved_cfg
