@@ -441,6 +441,50 @@
 #        be 0, else exit 1), and all v12/v13 gates preserved.
 #        NOT field-tested yet on the .111 real machine (Linux
 #        self-check harness only).
+#   - v20 (task t_ed26cc98, 2026-10-13). THIRD FIELD REGRESSION on the
+#     .111 bare box (fresh dir D:\ca-gui-test, install.ps1 v19):
+#     a) CRASH (seconds-in, uncaught): Get-RegistrySubKeys returns
+#        `,$out` with $out=@() -- a ONE-ELEMENT ARRAY containing an
+#        EMPTY ARRAY. foreach then iterates that empty-array ELEMENT
+#        (not zero iterations), and Split-Path -Leaf <empty> throws
+#        ParameterArgumentValidationErrorEmptyArrayNotAllowed
+#        (reproduced on pwsh 7.4.6 Linux, /tmp/repro_empty_root.ps1).
+#        Trigger: HKCU\Software\Python\PythonCore EXISTS with ZERO
+#        subkeys (left-behind root after a real uninstall / registry
+#        cleaner). Observed at line 1119; the SAME pattern sits at
+#        965-966, 1118-1119, 1617-1618, 1683-1684. Fix: helper now
+#        appends only REAL strings (skips any non-string/blank item,
+#        so an unrolled empty array never enters $out), AND every
+#        caller guards with `Where-Object { $_ }` (defense in depth,
+#        both layers independently sufficient).
+#     b) DEAD-END (install stops): "REGISTERED but broken" hard-threw
+#        with a repair recipe that does NOT work on the real box
+#        (/repair /quiet TargetDir=... -> 1602; /uninstall /quiet ->
+#        1603 -- field log D:\ca-gui-test.log 01:50-02:10). Fix: the
+#        broken registration is no longer terminal. When -UsePbs is
+#        given, we now FALL THROUGH to the portable PBS route (no
+#        registration read or written); otherwise the installer
+#        continues with the OTHER routes (PBS auto-try, -PythonPath,
+#        pre-seeded archive) before stopping. NEW -IgnoreRegistryState
+#        switch: skip the registration gate entirely (explicit
+#        user opt-in, loud warning, registry never touched).
+#     c) SILENT DOWNGRADE (-UsePbs): TWO independent resolver bugs,
+#        both live-verified 2026-10-13 against npmmirror:
+#        - npmmirror keeps only the NEWEST patch of each minor in
+#          the LATEST date dir (20261009/ = 3.12.15 ONLY); pinned
+#          3.12.10 lives in an OLD dir (20250529/, masked name
+#          cpython-3.12.10+202****0529-..., SHA256SUMS present).
+#          v19 resolved ONLY the latest dir.
+#        - the filename regex tail '\.\d+\+' NEVER matched a full
+#          x.y.z pin (real names are "cpython-3.12.10+202****...",
+#          '+' directly after the patch, no extra ".NN" segment).
+#        Net effect: "could not resolve ... falling back to the
+#        official installer path" -> registry-writing installer ran
+#        with no notice. Fix: Get-PbsArchive walks date dirs
+#        NEWEST-FIRST until it finds the pinned version, the regex
+#        patch segment is optional ((?:\.\d+)?\+), and the fallback
+#        message is now LOUD and explicit (states the registry
+#        consequence, tells the user how to stop).
 param(
     [string]$InstallDir = "",
     # v7: unified package/archive directory. Defaults to
@@ -518,7 +562,15 @@ param(
     # choice, not-empty confirm, pre-install "continue anyway") is
     # auto-answered with its default instead of hanging on Read-Host
     # (a real hazard when stdin is closed/NUL on .111 runs).
-    [switch]$Yes
+    [switch]$Yes,
+    # v20: treat the pinned-version REGISTRATION STATE as absent:
+    # no "registered but broken" gate, no reuse, no conflict -- the
+    # official-installer registration check is skipped entirely.
+    # Meant for dangling registrations whose repair/uninstall both
+    # fail (field: /repair -> 1602, /uninstall -> 1603). The
+    # registry itself is NEVER written by this switch (only the
+    # official installer exe route writes it, as before).
+    [switch]$IgnoreRegistryState
 )
 
 $ErrorActionPreference = "Stop"
@@ -677,54 +729,77 @@ function Get-UrlText([string]$Url) {
 #   @{ Date; MaskedName; Url; Size; Sha256 }
 # $Sha256 is $null when the manifest could not be fetched/parsed; the
 # CALLER decides whether that is fatal (default: it IS fatal, v5).
+# v20: npmmirror keeps only the NEWEST patch of each minor in the
+# LATEST date dir (live-checked 2026-10-13: 20261009/ carries
+# 3.12.15, NO 3.12.10); pinned 3.12.10 lives in the OLD dir
+# 20250409/ (identical masked-name layout + SHA256SUMS). v19 looked
+# ONLY at the latest dir -> "could not resolve" -> silent downgrade
+# to the registry-writing official installer. Now the date dirs are
+# walked NEWEST-FIRST until the pinned version is found (bounded
+# sweep, newest-first keeps "latest release" semantics when the
+# version IS current).
 function Get-PbsArchive([string]$Mirror, [string]$Version) {
     $root = $Mirror.TrimEnd('/') + '/'
-    # 1) latest date directory from the root JSON listing
+    # 1) ALL date directories from the root JSON listing (v20: sorted
+    # newest-first; v19 kept only the latest one)
     $rootJson = Get-UrlText $root
     if (-not $rootJson) { return $null }
     $dirs = @()
     try { $dirs = ($rootJson | ConvertFrom-Json) } catch { return $null }
-    $latest = ""
+    $dateDirs = @()
     foreach ($d in $dirs) {
-        if ($d.name -match '^(\d{8})/$') {
-            if ($d.name -gt $latest) { $latest = $d.name }
-        }
+        if ($d.name -match '^(\d{8})/$') { $dateDirs += $d.name }
     }
-    if (-not $latest) { return $null }
-    $date = $latest.TrimEnd('/')
-    # 2) listing inside the date directory
-    $dirJson = Get-UrlText ($root + $date + '/')
-    if (-not $dirJson) { return $null }
-    $files = @()
-    try { $files = ($dirJson | ConvertFrom-Json) } catch { return $null }
-    $escaped = '^cpython-' + $Version.Replace('.', '\.') + '\.\d+\+'
-    $want = $null
-    foreach ($f in $files) {
-        if ($f.name -match $escaped -and
-            $f.name -match 'x86_64-pc-windows-msvc-install_only\.tar\.gz$') {
-            $want = $f; break
-        }
-    }
-    if (-not $want) { return $null }
-    # 3) real filename: replace the masked ** run with the date
-    $realName = $want.name -replace '\*{2,}', $date
-    $url = ($root + $date + '/' + [Uri]::EscapeDataString($realName))
-    # 4) expected sha256 from the SAME directory's SHA256SUMS
-    $sha = $null
-    $sums = Get-UrlText ($root + $date + '/SHA256SUMS')
-    if ($sums) {
-        foreach ($line in ($sums -split "`n")) {
-            $line = $line.Trim("`r")
-            if ($line -like ('*' + $want.name)) {
-                $sha = ($line -split '\s+')[0]
-                break
+    if ($dateDirs.Count -eq 0) { return $null }
+    # string sort == chronological for YYYYMMDD
+    $dateDirs = @($dateDirs | Sort-Object -Descending)
+    # bound the sweep: npmmirror date dirs are not frequent; the
+    # whole list is < 100 entries, walking it is cheap, but stop at
+    # the first dir that CONTAINS the pinned version.
+    # v20 CRITICAL FIX: the v19 tail '\.\d+\+' only matches when
+    # $Version is MAJOR.MINOR (it matches the PATCH segment, e.g.
+    # "3.10" -> "cpython-3.10.15+..."). For a full x.y.z pin the
+    # archive name is "cpython-<x.y.z>+<date>..." -- '+' DIRECTLY
+    # after the patch, no extra ".NN". This is why -UsePbs NEVER
+    # resolved 3.12.10 (independent of the date-dir issue). Make
+    # the patch segment optional so both forms match.
+    $escaped = '^cpython-' + $Version.Replace('.', '\.') + '(?:\.\d+)?\+'
+    foreach ($latest in $dateDirs) {
+        $date = $latest.TrimEnd('/')
+        # 2) listing inside the date directory
+        $dirJson = Get-UrlText ($root + $date + '/')
+        if (-not $dirJson) { continue }
+        $files = @()
+        try { $files = ($dirJson | ConvertFrom-Json) } catch { continue }
+        $want = $null
+        foreach ($f in $files) {
+            if ($f.name -match $escaped -and
+                $f.name -match 'x86_64-pc-windows-msvc-install_only\.tar\.gz$') {
+                $want = $f; break
             }
         }
+        if (-not $want) { continue }
+        # 3) real filename: replace the masked ** run with the date
+        $realName = $want.name -replace '\*{2,}', $date
+        $url = ($root + $date + '/' + [Uri]::EscapeDataString($realName))
+        # 4) expected sha256 from the SAME directory's SHA256SUMS
+        $sha = $null
+        $sums = Get-UrlText ($root + $date + '/SHA256SUMS')
+        if ($sums) {
+            foreach ($line in ($sums -split "`n")) {
+                $line = $line.Trim("`r")
+                if ($line -like ('*' + $want.name)) {
+                    $sha = ($line -split '\s+')[0]
+                    break
+                }
+            }
+        }
+        return @{
+            Date = $date; MaskedName = $want.name
+            Url = $url; Size = [long]$want.size; Sha256 = $sha
+        }
     }
-    return @{
-        Date = $date; MaskedName = $want.name
-        Url = $url; Size = [long]$want.size; Sha256 = $sha
-    }
+    return $null
 }
 
 # v6: Get-LatestNodeVersion removed -- Node is pinned (v22.20.0) and
@@ -962,7 +1037,7 @@ function Get-PythonCandidates([string]$Explicit, [string]$InstallDir) {
         if (-not (Test-PathSafe $regRoot)) { continue }
         # v13: plain drive-qualified subkey paths (no provider-qualified
         # $x.PSPath -- PS 5.1-safety and the v13 static gate).
-        foreach ($tagPath in (Get-RegistrySubKeys $regRoot)) {
+        foreach ($tagPath in @((Get-RegistrySubKeys $regRoot) | Where-Object { $_ })) {
             $tagName = [string](Split-Path -Leaf $tagPath)
             # v14: InstallPath read (default OR named, non-empty wins,
             # trimmed) is centralized in Get-PythonCoreInstallPath.
@@ -1034,10 +1109,10 @@ function Get-PythonCandidates([string]$Explicit, [string]$InstallDir) {
             Selected = $false; SkipReason = $skip
         }
     }
-    # v15: comma keeps this an ARRAY even with 0/1 elements (same class
-    # as Get-RegistrySubKeys -- a bare `return $out` unrolls a single
-    # hashtable to a scalar and the caller's `+=`/indexing misbehaves).
-    return ,$out
+    # v15/v20: @() keeps this an ARRAY even with 0/1 elements AND
+    # never wraps an empty array into a phantom element (the v19
+    # comma-trick did exactly that -- see Get-RegistrySubKeys).
+    return @($out)
 }
 
 # The DECISION. Applies the selection order over the candidates and
@@ -1115,7 +1190,7 @@ function Get-RegisteredPythonInstall([string]$Version) {
     $tagDirs = @(Get-RegistrySubKeys "HKCU:\Software\Python\PythonCore")
     $tagDirs += @(Get-RegistrySubKeys "HKLM:\Software\Python\PythonCore")
     $tagDirs += @(Get-RegistrySubKeys "HKLM:\Software\WOW6432Node\Python\PythonCore")
-    foreach ($tagPath in $tagDirs) {
+    foreach ($tagPath in @($tagDirs | Where-Object { $_ })) {
         $tagName = [string](Split-Path -Leaf $tagPath)
         if ((Get-VersionKey $tagName) -ne $key) { continue }
         # v14: InstallPath read (default OR named, non-empty wins,
@@ -1217,6 +1292,11 @@ function Test-LocalPythonArchiveIntent {
 }
 
 function Test-PinnedPythonRegistration([string]$Version, [bool]$Force) {
+    # v20: -IgnoreRegistryState -- treat the registration state as
+    # absent everywhere (no reuse, no broken gate, no conflict).
+    if ($IgnoreRegistryState) {
+        return @{ Action = "ignored"; Exe = $null; Sources = @() }
+    }
     $reg = Get-RegisteredPythonInstall $Version
     $res = @{ Action = "clear"; Exe = $null; Sources = $reg.Sources }
     if (-not $reg.Found) { return $res }
@@ -1577,20 +1657,32 @@ function Get-RegistryKeyValues([string]$KeyPath) {
 # ("HKCU:\Software\Python\PythonCore"). Returns an array of
 # full subkey paths (root + "\" + name), empty when the root is
 # missing/empty/unreadable. Plain -Path semantics throughout.
+# v20 CRITICAL FIX: `return ,$out` with $out=@() returned a
+# ONE-ELEMENT ARRAY CONTAINING AN EMPTY ARRAY -- callers' foreach
+# then iterated that empty-array ELEMENT (not zero elements) and
+# Split-Path -Leaf crashed with
+# ParameterArgumentValidationErrorEmptyArrayNotAllowed (field:
+# .111 empty HKCU PythonCore root, seconds into install; repro on
+# pwsh 7.4.6). The comma-trick was added in v13 for the one-element
+# unwrapping bug; applied to an EMPTY array it poisons every caller.
+# New contract: only real, non-blank STRING paths are appended
+# (an unrolled empty/blank item can never enter $out), and the
+# return value stays a real array thanks to @() of the pipeline.
 function Get-RegistrySubKeys([string]$RootPath) {
-    $out = @()
-    if (-not $RootPath) { return $out }
-    if (-not (Test-Path -LiteralPath $RootPath)) { return $out }
+    if (-not $RootPath) { return @() }
+    if (-not (Test-Path -LiteralPath $RootPath)) { return @() }
+    # v20: collect ONLY string, non-blank entries. Any pipeline stage
+    # that unrolls to $null / an empty array / a blank string is
+    # dropped here -- the @() wrapper keeps the result a true ARRAY
+    # (0 or N elements, never an empty-array ELEMENT).
+    $items = @()
     foreach ($k in (Get-ChildItem -LiteralPath $RootPath -ErrorAction SilentlyContinue)) {
-        if ($k -and $k.PSChildName) { $out += (Join-Path $RootPath ([string]$k.PSChildName)) }
+        if ($k -and $k.PSChildName) {
+            $p = (Join-Path $RootPath ([string]$k.PSChildName))
+            if ($p -and ([string]$p).Trim()) { $items += [string]$p }
+        }
     }
-    # NOTE: the comma operator keeps this an ARRAY even with 0/1 elements.
-    # Without it PowerShell unwraps a single-element array to a scalar, and
-    # `$x += Get-RegistrySubKeys ...` then CONCATENATES STRINGS instead of
-    # appending elements -- observed on a real box with exactly one
-    # registered Python (paths fused into garbage -> ownership check read
-    # our own registration as "not ours").
-    return ,$out
+    return @($items | Where-Object { $_ -is [string] -and $_.Trim() })
 }
 
 # v13: Is the pinned-version registration OURS? The official
@@ -1614,7 +1706,7 @@ function Test-RegistrationIsOurs([string]$Version, [string]$InstallDir) {
     $tagDirs = @(Get-RegistrySubKeys "HKCU:\Software\Python\PythonCore")
     $tagDirs += @(Get-RegistrySubKeys "HKLM:\Software\Python\PythonCore")
     $tagDirs += @(Get-RegistrySubKeys "HKLM:\Software\WOW6432Node\Python\PythonCore")
-    foreach ($tagPath in $tagDirs) {
+    foreach ($tagPath in @($tagDirs | Where-Object { $_ })) {
         $name = [string](Split-Path -Leaf $tagPath)
         if ((Get-VersionKey $name) -ne $key) { continue }
         # v14: InstallPath read (default OR named, non-empty wins,
@@ -1680,7 +1772,7 @@ function Get-RegistrationResidue([string]$Version) {
     $tagDirs = @(Get-RegistrySubKeys "HKCU:\Software\Python\PythonCore")
     $tagDirs += @(Get-RegistrySubKeys "HKLM:\Software\Python\PythonCore")
     $tagDirs += @(Get-RegistrySubKeys "HKLM:\Software\WOW6432Node\Python\PythonCore")
-    foreach ($tagPath in $tagDirs) {
+    foreach ($tagPath in @($tagDirs | Where-Object { $_ })) {
         $name = [string](Split-Path -Leaf $tagPath)
         if ((Get-VersionKey $name) -eq $key) { $res.PythonCore++ }
     }
@@ -2114,6 +2206,16 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
     # WixBundleInstalled silent-skip guard). Read-only probes; an
     # already-registered interpreter is EXECUTED once to check it
     # is alive (same discipline as the candidate probes above).
+    # v20: -IgnoreRegistryState skips the gate entirely.
+    if ($IgnoreRegistryState) {
+        $out.RegAction = "ignored"
+        $out.RegExe = $null
+        $out.RegSources = @()
+        $regDetail = "-IgnoreRegistryState: the pinned-version registration gate is SKIPPED by explicit request (broken/dangling registrations whose repair+uninstall both fail)"
+        $regStatus = "SKIP"
+        $regCheck = @{ Action = "ignored"; Exe = $null; Sources = @() }
+        Add-Row "python" "official $PythonVersion registration" $regStatus $regDetail
+    } else {
     $regCheck = Test-PinnedPythonRegistration $PythonVersion ([bool]$ForceOwnRuntime)
     $out.RegAction = $regCheck.Action
     $out.RegExe = $regCheck.Exe
@@ -2138,6 +2240,7 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
     $regStatus = "OK"
     if ($regCheck.Action -eq "broken" -or $regCheck.Action -eq "conflict") { $regStatus = "MISSING" }
     Add-Row "python" "official $PythonVersion registration" $regStatus $regDetail
+    }   # v20: end of the -IgnoreRegistryState else
     foreach ($name in @("node", "npm")) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if ($cmd) {
@@ -2473,7 +2576,10 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
     # v10: broken / conflicting same-version registration is a FIX
     # FIRST item, not a silent skip.
     if ($out.RegAction -eq "broken") {
-        $userMustFix += ("BROKEN Python $PythonVersion registration (registry says installed, files missing): run 'python-$PythonVersion-amd64.exe /repair /quiet' then '/uninstall /quiet' (or clean ARP + HKCU\Software\Python\PythonCore + HKCU\Software\Classes\Installer\Dependencies manually), then re-run this installer -- a silent install would be SKIPPED (WixBundleInstalled)")
+        # v20: the old /repair+/uninstall recipe FAILED on the .111
+        # field box (1602/1603); re-point the guidance at the routes
+        # that actually work.
+        $userMustFix += ("BROKEN Python $PythonVersion registration (registry says installed, files missing) -- the official-installer route would SILENTLY SKIP (WixBundleInstalled). EASIEST: re-run with -UsePbs (portable, no registration) or -IgnoreRegistryState; to clean the registration for real use msiexec /x {GUID} per ARP/Dependencies entry, then delete HKCU\Software\Python\PythonCore\3.12")
     }
     if ($out.RegAction -eq "conflict") {
         $userMustFix += ("-ForceOwnRuntime with Python $PythonVersion already registered: the official installer cannot lay a second same-version copy -- use -UsePbs (portable, no registration) or a different patch version (e.g. 3.12.9)")
@@ -2662,7 +2768,20 @@ function Install-PythonRuntime([string]$InstallDir) {
                     $pbs = $null
                     try { $pbs = Get-PbsArchive $PbsMirror $PythonVersion } catch { }
                     if (-not $pbs) {
-                        Write-Warning "[install] -UsePbs: could not resolve a cpython $PythonVersion archive from $PbsMirror -- falling back to the official installer path"
+                        # v20: LOUD downgrade notice (was a quiet
+                        # Write-Warning the user read past). The
+                        # official-installer route WRITES the registry
+                        # (HKLM MSI components + HKCU bundle) -- that
+                        # is a real behavior change vs the promised
+                        # self-contained PBS route, so say it plainly
+                        # and give a one-key way out.
+                        Write-Host ""
+                        Write-Warning "[install] -UsePbs: could NOT resolve a cpython $PythonVersion archive from $PbsMirror (all date directories searched, newest-first)."
+                        Write-Warning "[install] DOWNGRADE: falling back to the OFFICIAL INSTALLER path -- this route is NOT self-contained:"
+                        Write-Warning "[install]   it writes registry entries (HKLM MSI components + HKCU bundle registration) on this machine."
+                        Write-Host   "[install]   To keep the self-contained/no-registry guarantee: stop now (Ctrl+C), pre-seed the package"
+                        Write-Host   "[install]   dir ($PackageDir) with cpython-$PythonVersion-...-install_only.tar.gz, or pass -PythonArchive."
+                        Write-Host   ""
                     }
                 }
             }
@@ -2803,18 +2922,49 @@ function Install-PythonRuntime([string]$InstallDir) {
                 }
             }
             if ($regCheck.Action -eq "broken") {
-                throw @"
-[install] Python $PythonVersion is REGISTERED on this machine but broken (interpreter missing or not runnable at '$($regCheck.Exe)').
-The official installer would SILENTLY SKIP (WixBundleInstalled / Detect: Present) and exit 0 without installing anything.
-FIX (pick one), then re-run this installer:
-  (1) repair then remove the registration:
-      python-$PythonVersion-amd64.exe /repair /quiet
-      python-$PythonVersion-amd64.exe /uninstall /quiet
-      (in the dangling state /uninstall alone fails with 1603; /repair first restores files, then /uninstall succeeds)
-  (2) clean the registry manually: ARP entries with DisplayName 'Python $PythonVersion',
-      HKCU\Software\Python\PythonCore\<3.12>, HKCU\Software\Classes\Installer\Dependencies
-  (3) switch routes: -UsePbs (portable build, no registration) or -PythonPath to an existing interpreter
+                # v20: no longer a dead end (field 2026-10-13: /repair
+                # -> 1602 AND /uninstall -> 1603 -- the published recipe
+                # did not work, and the installer just stopped). The
+                # broken registration only blocks the OFFICIAL-INSTALLER
+                # route (it would silently skip: WixBundleInstalled /
+                # Detect: Present). Every other route is unaffected:
+                # -UsePbs and a PBS/PythonArchive tarball write no
+                # registration at all. So: warn loudly, then fall
+                # through -- if the user gave -UsePbs / -PythonArchive
+                # the PBS path above already set $archive (non-exe)
+                # and this whole block is skipped; if they gave
+                # -IgnoreRegistryState we skip the gate entirely;
+                # only the plain official-installer route still stops
+                # (it genuinely cannot proceed), with the registry
+                # GUID-level removal recipe appended.
+                if ($IgnoreRegistryState) {
+                    Write-Warning "[install] -IgnoreRegistryState: pinned $PythonVersion registration is broken/dangling but the gate is SKIPPED by explicit request -- the registry is not read further and not written by this switch."
+                } elseif ($UsePbs) {
+                    # v20: -UsePbs was requested (the PBS resolution failed and
+                    # we fell back to the official installer above, LOUDLY).
+                    # Do not dead-end here: the official installer may still
+                    # succeed (this machine's registration belongs to the
+                    # same broken trace, WiX may repair-over); if it silently
+                    # skips, the v10 post-install exe check fails LOUDLY with
+                    # the installer log dumped -- nothing is half-installed.
+                    Write-Warning "[install] -UsePbs was requested but the PBS archive could not be resolved (see the DOWNGRADE notice above); continuing on the official-installer route despite the broken registration. If the installer silently skips, the post-install check will fail loudly with the installer log."
+                } elseif ($PythonArchive -and $archive) {
+                    Write-Warning "[install] a self-contained archive route is selected ($archive) -- it writes no registration, the broken state does not block it. Continuing."
+                } else {
+                    Write-Warning "[install] Python $PythonVersion is REGISTERED on this machine but broken (interpreter missing or not runnable at '$($regCheck.Exe)') -- the OFFICIAL INSTALLER route would silently skip (WixBundleInstalled / Detect: Present)."
+                    throw @"
+[install] Python $PythonVersion registration is broken AND no alternative route was selected. FIX (pick one), then re-run:
+  (1) -UsePbs            -- portable python-build-standalone runtime (npmmirror, sha256-verified): NO registration read or written, works around the dangling state entirely
+  (2) -IgnoreRegistryState -- skip the registration gate (the official installer runs anyway; if it still silently-skips, the install fails loudly at the post-install exe check -- nothing is half-installed)
+  (3) -PythonArchive C:\path\to\cpython-...-install_only.tar.gz -- self-contained archive route, no registration involved
+  (4) -PythonPath C:\path\to\python.exe -- reuse an existing interpreter
+  (5) clean the registration for real (the /repair+/uninstall recipe FAILED on the .111 field box with 1602/1603; the reliable route is GUID-level removal):
+      msiexec /x {GUID} /quiet  -- one per MSI component, GUIDs read from
+        HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ (DisplayName like 'Python 3.12 Core Interpreter')
+        and HKCU\Software\Classes\Installer\Dependencies (each child key name IS the dependency GUID)
+      then delete the leftover HKCU\Software\Python\PythonCore\3.12 tree
 "@
+                }
             }
             if ($regCheck.Action -eq "conflict") {
                 throw @"
