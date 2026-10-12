@@ -238,7 +238,7 @@ export function Sidebar() {
                 aria-expanded={!sections.projectCollapsed}
                 title={sections.projectCollapsed ? '展开项目' : '折叠项目'}
               >
-                {sections.projectCollapsed ? <Icon.ChevronRight size={12} /> : <Icon.ChevronDown size={12} />}
+                {sections.projectCollapsed ? <Icon.ChevronRight size={13} /> : <Icon.ChevronDown size={13} />}
                 <span>项目</span>
               </button>
               <span className="sidebar__section-count">{groups.projects.length}</span>

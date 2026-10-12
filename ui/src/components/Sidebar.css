@@ -145,30 +145,36 @@
 
 /* ── 分区（会话/项目两段）───────────────────────────────────────── */
 .sidebar__section { margin-bottom: 4px; }
+/* 头行整行做成可点区域：标题按钮 flex:1 吃满宽度，条数徽章靠右克制留白。 */
 .sidebar__group-label--head {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px 6px 2px 4px;
+  margin-bottom: 3px;
 }
 .sidebar__section-toggle {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  color: inherit;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.7px;
-  text-transform: uppercase;
-  padding: 2px 3px;
-  margin-left: -3px;
-  border-radius: var(--radius-sm);
-}
-.sidebar__section-toggle:hover { background: var(--bg-hover); }
-.sidebar__section-count {
+  gap: 5px;
   flex: 1 1 auto;
-  text-align: right;
-  font-size: 10px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.sidebar__section-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar__section-count {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 6px 8px 6px 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 .sidebar__more {
   display: block;
