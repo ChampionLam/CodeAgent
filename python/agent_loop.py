@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import traceback
 
 import tool_lessons
 from dataclasses import dataclass, field
@@ -40,6 +41,22 @@ TOOL_FAIL_STREAK_BUDGET = 2
 TOOL_FAIL_TOTAL_BUDGET = 6
 #: 冷却 + 同参拒绝累计几次 → 终止本轮（避免白烧循环）。
 MAX_TOOL_REFUSALS = 3
+#: 用户拒绝（deny）后记指纹；同一指纹再提 → 不弹卡，直接回 DENIED_REPEAT。
+#: 真机教训（2026-10-12）：模型把被拒的 PowerShell 下载原样重提 4 次，
+#: 用户连点 3 次「拒绝」还在弹卡 —— 旧逻辑只回灌 reason，完全靠模型自觉。
+DENIED_REPEAT = "DENIED_REPEAT"
+#: 同一次运行内用户 deny 次数达到即彻底停止弹卡，面向用户收尾结束本轮。
+MAX_USER_DENIES = 2
+#: DENIED_REPEAT 连续拒掉几次（模型无视错误照旧重提）→ 终止本轮，防死循环。
+MAX_DENIED_REPEATS = 3
+#: 给模型的硬约束文案（提示层，配合下面的确定性机制）。
+DENIED_REPEAT_NOTE = (
+    "该操作已被用户拒绝，请勿再以相同参数（或指向同一 URL / 同一落盘路径）重复请求；"
+    "请换一种方式继续，或停下来向用户说明情况并等待指示。"
+)
+_DENY_STOP_TEXT = (
+    "已连续被用户拒绝 %d 次，我先停下来等你的指示；需要换种做法继续的话，直接告诉我。"
+)
 DEFAULT_APPROVAL_TIMEOUT = 300
 MAX_TOOL_OUTPUT_CHARS = 20000
 
@@ -143,6 +160,11 @@ class LoopDeps:
     context_governor: Any | None = None
     # 工具失败经验库（tool_lessons.LessonStore 或测试假件）；None = 不记经验。
     lessons: Any | None = None
+    # 自愈挂点（P0-5）：出错现场上抛给 sidecar（自动触发诊断）；None = 不自愈。
+    # 只收四类事件：tool_failure / model_anomaly / dependency_missing /
+    # process_crash，payload 形状 {kind, code, message, traceback?, context?}。
+    # sidecar 侧实现必须自吞异常 —— 自愈绝不连坐对话循环。
+    on_error: "Callable[[dict], None] | None" = None
     #: 这一轮的运行号（上层建的，断点文件里用它做主键）；空 = 不记断点。
     run_id: str = ""
     #: 断点回调：callable(payload) -> None。payload 见 _checkpoint()。None = 不记断点。
@@ -308,6 +330,69 @@ def _tool_message(tool_call_id: str, text: str) -> dict:
     return {"role": "tool", "tool_call_id": tool_call_id, "content": _truncate(text)}
 
 
+# --- 拒绝指纹（t_7738a2bc）---------------------------------------------------
+# deny 之后把（工具名 + 归一化参数）记进指纹集合；同指纹再提直接 DENIED_REPEAT，
+# 不再弹审批卡。归一化基于 _canonical（JSON 规范化，吃掉键序/空白），再叠一层
+# 下载类等价判定：同一 URL、或「同一域名 + 同一落盘路径」视为同一操作 —— 否则
+# 模型换个中转 URL / 换个等价写法（-OutFile 大小写、路径分隔符）就能绕过指纹。
+# 命令行类工具再额外吃掉引号/反斜杠/大小写/空白等价写法。
+
+_URL_RE = re.compile(r"https?://[^\s\"'<>)]+", re.IGNORECASE)
+_DOMAIN_RE = re.compile(r"(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?", re.IGNORECASE)
+
+
+def _norm_download_token(tok: str) -> str:
+    """等价写法归一：统一小写、正反斜杠、去引号。"""
+    return tok.strip().strip("'\"").replace("\\", "/").lower()
+
+
+def _deny_fingerprint(name: str, args: dict) -> str:
+    """deny 指纹：调用签名 +（对下载/命令类）URL 与「域名+落盘路径」等价类。"""
+    parts = [_call_signature(name, args)]
+    blob = " ".join(str(v) for v in args.values())
+    for m in _URL_RE.findall(blob):
+        parts.append("url:" + _norm_download_token(m))
+    # 域名+落盘路径等价类：只对显式含 URL 的下载类调用做，避免误伤本地命令。
+    if any(_URL_RE.search(str(v)) for v in args.values()):
+        domains = {m.group(0).lower() for m in _DOMAIN_RE.finditer(
+            " ".join(_URL_RE.findall(blob)))}
+        outs = [_norm_download_token(v) for v in args.values()
+                if isinstance(v, str)]
+        for d in sorted(domains):
+            for o in outs:
+                if o.endswith((".zip", ".md", ".json", ".exe", ".msi", ".txt",
+                                ".pdf", ".gz", ".tar", ".whl")):
+                    parts.append("dl:%s|%s" % (d, o.rsplit("/", 1)[-1]))
+    if name in ("run_shell", "run_command", "shell", "powershell", "cmd"):
+        # 命令行：整串命令归一化（去引号/换行、压空白、小写化引号外内容不可行，
+        # 这里统一小写 —— 对「等价重写」宁可误杀，模型可换方式或问用户）。
+        cmd = _norm_download_token(blob).replace("\n", " ")
+        parts.append("cmd:" + re.sub(r"\s+", " ", cmd))
+    return "\n".join(parts)
+
+
+def _deny_fp_match(name: str, args: dict, fingerprints: set[str]) -> bool:
+    """是否命中已拒绝指纹。签名单列；等价类逐条比对（同一 URL 或域名+文件名）。"""
+    if _call_signature(name, args) in fingerprints:
+        return True
+    blob = " ".join(str(v) for v in args.values())
+    urls = [_norm_download_token(u) for u in _URL_RE.findall(blob)]
+    if any("url:" + u in fingerprints for u in urls):
+        return True
+    if urls:
+        domains = {m.group(0).lower() for m in _DOMAIN_RE.finditer(" ".join(urls))}
+        outs = [_norm_download_token(v) for v in args.values()
+                if isinstance(v, str)]
+        for d in domains:
+            for o in outs:
+                if o and "dl:%s|%s" % (d, o.rsplit("/", 1)[-1]) in fingerprints:
+                    return True
+    if name in ("run_shell", "run_command", "shell", "powershell", "cmd"):
+        cmd = re.sub(r"\s+", " ", _norm_download_token(blob).replace("\n", " "))
+        return "cmd:" + cmd in fingerprints
+    return False
+
+
 # ---------------------------------------------------------------------------
 # the loop
 # ---------------------------------------------------------------------------
@@ -384,11 +469,40 @@ def run(ctx: LoopContext, *, deps: LoopDeps) -> Iterator[dict]:
                 _checkpoint(deps, {"event": "end", "status": "failed", "reason": exit_code})
 
 
+def _report_error(deps, ctx, *, kind: str, code: str, message: str,
+                  traceback_text: str = "", context: dict | None = None) -> None:
+    """出错现场上抛给自愈挂点（P0-5）。挂点自身必须吞异常，这里再兜一层。"""
+    hook = getattr(deps, "on_error", None)
+    if hook is None:
+        return
+    try:
+        hook({"kind": kind, "code": code, "message": str(message),
+              "traceback": traceback_text, "context": dict(context or {})})
+    except Exception:                        # noqa: BLE001 - 自愈绝不连坐循环
+        pass
+
+
 def _run(ctx: LoopContext, *, deps: LoopDeps) -> Iterator[dict]:
     """跑一轮用户消息引发的完整循环，逐个 yield 事件。"""
     try:
         yield from _run_inner(ctx, deps)
     except Exception as e:  # 契约：任何未预期异常都变成 chat.error，不许抛出去
+        # t_5dd44e42：先落盘再 yield——traceback 绝不丢。
+        try:
+            import logging_kit
+            logging_kit.get_logger().log(
+                "error", "agent loop internal error: %s: %s"
+                % (type(e).__name__, e),
+                source="agent_loop",
+                run_id=(getattr(deps, "run_id", "") or None),
+                session_id=(getattr(ctx, "session_id", None) or None),
+                data={"traceback": traceback.format_exc()[:2048]})
+        except Exception:                        # pragma: no cover - 日志永不连坐
+            pass
+        # P0-5：进程内未预期异常 → 病历上抛（process_crash 类）
+        _report_error(deps, ctx, kind="process_crash", code="INTERNAL",
+                      message="%s: %s" % (type(e).__name__, e),
+                      traceback_text=traceback.format_exc())
         yield {"type": EVENT_ERROR, "code": INTERNAL, "message": "%s: %s" % (type(e).__name__, e)}
 
 
@@ -425,6 +539,9 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
     rounds = 0
     tool_calls_run = 0
     approval_seq = 0
+    denied_fps: set[str] = set()      # 本轮用户已拒绝的操作指纹（t_7738a2bc）
+    user_denies = 0                   # 本轮用户 deny 总次数（上限兜底）
+    denied_repeat_hits = 0            # 同指纹重提被我们直接拒掉的次数
     tools_arg = deps.tool_schemas() if ctx.use_tools else None
 
     # Mount point 2 (request-error, contract 7.4): per-request max_tokens
@@ -465,12 +582,24 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
         net_retry_wait = 0.0           # >0 = 这一轮要退避重试
         partial_saved_at = 0.0         # 这一轮的「半截正文」上次落盘时刻
         partial_saved_chars = 0        # 上次落盘时已经写了多少字（攒够也提前存）
+        _model_call_logged = False     # t_5dd44e42：每轮模型调用只记一条开始
 
         for ev in deps.llm_stream(cfg, list(send_messages), tools=tools_arg,
                                   model=ctx.model,
                                   max_tokens=max_tokens_override if max_tokens_override is not None
                                   else ctx.max_tokens,
                                   is_cancelled=deps.is_cancelled):
+            # t_5dd44e42：模型调用路径留日志（首个事件即记一次调用开始）。
+            if not _model_call_logged:
+                _model_call_logged = True
+                try:
+                    import logging_kit
+                    logging_kit.get_logger().log(
+                        "debug", "model call start", source="agent_loop",
+                        run_id=(getattr(deps, "run_id", "") or None),
+                        session_id=(getattr(ctx, "session_id", None) or None))
+                except Exception:            # pragma: no cover
+                    pass
             kind = ev.get("type")
             if kind == "delta":
                 chunk = ev.get("text") or ""
@@ -650,6 +779,10 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                 yield {"type": EVENT_TOOL_RESULT, "id": call_id, "name": name, "ok": False,
                        "content": note, "errorCode": TOOL_ARGUMENTS_INVALID,
                        "errorMessage": arg_error, "durationMs": 0, "decision": "deny"}
+                # P0-5：模型返回异常（参数不可解析）现场上抛。
+                _report_error(deps, ctx, kind="model_anomaly",
+                              code=TOOL_ARGUMENTS_INVALID, message=note,
+                              context={"tool": name})
                 messages.append(_tool_message(call_id, note))
                 continue
 
@@ -704,6 +837,24 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
             can_always = False
             reason = str(getattr(verdict, "reason", "") or "")
 
+            # 拒绝指纹闸（t_7738a2bc）：用户已 deny 过的操作再提 → 不弹卡，
+            # 直接以 DENIED_REPEAT 回给模型。确定性拦截，不依赖模型自觉。
+            if _deny_fp_match(name, args, denied_fps):
+                denied_repeat_hits += 1
+                note = ("该操作已被用户拒绝，本次调用直接拦截（%s）。%s"
+                        % (DENIED_REPEAT, DENIED_REPEAT_NOTE))
+                messages.append(_tool_message(call_id, note))
+                yield {"type": EVENT_TOOL_RESULT, "id": call_id, "name": name,
+                       "ok": False, "content": note, "errorCode": DENIED_REPEAT,
+                       "errorMessage": DENIED_REPEAT_NOTE, "durationMs": 0,
+                       "decision": "deny"}
+                if denied_repeat_hits >= MAX_DENIED_REPEATS:
+                    yield {"type": EVENT_ERROR, "code": DENIED_REPEAT,
+                           "message": note + "（模型无视拒绝连续重提 %d 次，终止本轮）"
+                                      % denied_repeat_hits}
+                    return
+                continue
+
             yield {"type": EVENT_TOOL_CALL, "id": call_id, "name": name, "arguments": args,
                    "level": tier, "requiresApproval": requires,
                    "canAlwaysAllow": can_always, "reason": reason}
@@ -724,11 +875,23 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                             level=tier, decision=final_decision, reason=reason)
 
             if final_decision == "deny":
-                note = "用户拒绝了这次工具调用（%s）" % (reason or "no reason given")
+                user_denies += 1
+                denied_fps.update(_deny_fingerprint(name, args).split("\n"))
+                note = "用户拒绝了这次工具调用（%s）%s" % (
+                    reason or "no reason given", DENIED_REPEAT_NOTE)
                 messages.append(_tool_message(call_id, note))
                 yield {"type": EVENT_TOOL_RESULT, "id": call_id, "name": name, "ok": False,
                        "content": note, "errorCode": "DENIED", "errorMessage": reason,
                        "durationMs": 0, "decision": "deny"}
+                # deny 次数上限兜底（t_7738a2bc）：连拒 N 次 = 模型一直在撞墙，
+                # 彻底停止弹卡，面向用户一句话收尾，本轮正常结束、不挂死。
+                if user_denies >= MAX_USER_DENIES:
+                    _flush_partial(deps, text_parts, rounds)
+                    _append_assistant(messages, _DENY_STOP_TEXT % user_denies, [])
+                    yield {"type": EVENT_DELTA, "text": _DENY_STOP_TEXT % user_denies}
+                    yield {"type": EVENT_DONE, "finishReason": "stop", "usage": usage,
+                           "rounds": rounds, "toolCallsRun": tool_calls_run}
+                    return
                 continue
 
             started = time.time()
@@ -738,6 +901,18 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
             content = getattr(result, "content", "") or ""
             error_code = getattr(result, "error_code", None)
             error_message = getattr(result, "error_message", None)
+            # t_5dd44e42：工具执行路径必须留日志（成功 info 摘要,失败 error）。
+            try:
+                import logging_kit
+                logging_kit.get_logger().log(
+                    "info" if ok else "error",
+                    "tool %s %s (%dms)" % (name, "ok" if ok else "failed",
+                                           duration_ms),
+                    source="tool:%s" % name,
+                    run_id=(getattr(deps, "run_id", "") or None),
+                    session_id=(getattr(ctx, "session_id", None) or None))
+            except Exception:                # pragma: no cover - 日志永不连坐
+                pass
 
             _audit_tool_call(deps, ctx, call_id=call_id, name=name, args=args,
                              level=tier, decision=final_decision, result=result,
@@ -765,6 +940,13 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                 fail_total[name] = fail_total.get(name, 0) + 1
                 last_error[name] = " ".join(
                     str(error_message or error_code or "").split())[:200]
+                # P0-5：工具失败现场上抛（含依赖缺失判定 —— run_shell 常见）。
+                _report_error(
+                    deps, ctx, kind="tool_failure", code=str(error_code or "TOOL_FAILED"),
+                    message=str(error_message or content or "")[:800],
+                    context={"tool": name, "args": args, "exitCode":
+                             (getattr(result, "data", None) or {}).get("exitCode")
+                             if isinstance(getattr(result, "data", None), dict) else None})
                 if fail_total[name] >= TOOL_FAIL_TOTAL_BUDGET:
                     cooldown.add(name)
                 persistent = (fail_streak[call_key] >= TOOL_FAIL_STREAK_BUDGET
