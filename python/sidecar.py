@@ -1610,23 +1610,11 @@ def _handle_mcp_rpc(req_id: str, method: str, params: dict) -> dict:
         name = name.strip()
         path = _mcp_config_path()
         # 落盘点：优先 config.mcp.json；主 config.json 里已写了 mcp 段就写回主文件
-        target = path
-        write_main = False
+        # 写回基于落盘现读的完整文档做增量修改（_load_mcp_doc 里做加固）。
         try:
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            raw = {}
-        if isinstance(raw, dict) and isinstance(raw.get("mcp"), dict):
-            write_main = True
-            servers = raw["mcp"].setdefault("servers", {})
-        else:
-            if os.path.abspath(target) == os.path.abspath(
-                    os.path.join(_tools_config_root(), "config.json")):
-                write_main = True
-                servers = raw.setdefault("mcp", {}).setdefault("servers", {})
-            else:
-                servers = raw.setdefault("servers", {})
+            raw, servers, target, write_main = _load_mcp_doc()
+        except mcp_client.McpError as exc:
+            return _make_error_response(req_id, "CONFIG_ERROR", exc.message)
         if not isinstance(servers, dict) or not isinstance(servers.get(name), dict):
             return _make_error_response(req_id, "NOT_FOUND",
                                         "unknown mcp server: %s" % name)
@@ -1637,20 +1625,11 @@ def _handle_mcp_rpc(req_id: str, method: str, params: dict) -> dict:
         entry["enabled"] = enabled
         entry.pop("disabled", None)
         # 原子写回（与 _persist_tools_disabled 同法：临时文件 + os.replace）
-        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-        text = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
-        fd, tmp = tempfile.mkstemp(prefix=".mcp-", suffix=".tmp",
-                                   dir=os.path.dirname(target) or ".")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            os.replace(tmp, target)
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+            _save_mcp_doc(raw, target)
+        except OSError as exc:
+            return _make_error_response(req_id, "IO_ERROR",
+                                        "写入配置失败: %s" % exc)
         _sync_mcp()
         return _make_ok_response(req_id, {"servers": mcp_tools.REGISTRY.status_list()})
 
@@ -1720,15 +1699,31 @@ def _validate_mcp_secret_fields(name: str, entry: dict) -> None:
 
 
 def _load_mcp_doc() -> tuple:
-    """读落盘点（与 mcp.toggle 同一套语义）：返回 (raw, servers, target, write_main)。"""
+    """读落盘点（与 mcp.toggle 同一套语义）：返回 (raw, servers, target, write_main)。
+
+    加固（t_6e40d247）：文件存在但读失败/解析失败时**拒绝写回**（抛
+    McpError），绝不静默 raw={}——否则任何写回分支都会把主 config.json
+    覆盖成只剩 mcp 段的最小文件（曾观察到的 37 字节事故）。只有文件
+    确实不存在时才允许从最小结构新建。
+    """
     import mcp_client
     path = _mcp_config_path()
     target = path
     write_main = False
-    try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    raw: object = None
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            # 损坏/半截（外部脚本非原子改写中被读到）→ 拒写，保住未知段
+            raise mcp_client.McpError(
+                "mcp 配置 %s 读失败（%s），为防覆盖未做写回；"
+                "请先修复该文件再操作 MCP 面板" % (path, exc), "CONFIG_ERROR")
+        if not isinstance(raw, dict):
+            raise mcp_client.McpError(
+                "mcp 配置 %s 顶层不是 JSON 对象" % path, "CONFIG_ERROR")
+    else:
         raw = {}
     if isinstance(raw, dict) and isinstance(raw.get("mcp"), dict):
         write_main = True
