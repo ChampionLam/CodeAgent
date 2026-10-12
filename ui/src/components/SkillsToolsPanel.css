@@ -342,3 +342,213 @@
     transition: none;
   }
 }
+
+/* ── MCP 服务器页签 ─────────────────────────────────────────── */
+
+.mcp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.mcp-toolbar__btn {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.mcp-toolbar__btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.mcp-toolbar__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  transition: background var(--motion-fast);
+}
+.mcp-server-row:hover {
+  background: var(--bg-hover);
+}
+.mcp-server-row__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mcp-server-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.mcp-server-row__name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.mcp-server-row__status {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  border-radius: 3px;
+  padding: 1.5px 6px;
+}
+.mcp-server-row__status--ready {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+.mcp-server-row__status--idle {
+  color: var(--text-muted);
+  background: var(--bg-app);
+}
+.mcp-server-row__status--off {
+  color: var(--text-muted);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+}
+.mcp-server-row__status--dead {
+  color: #ff9f9f;
+  background: rgba(200, 60, 60, 0.14);
+}
+.mcp-server-row__meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mcp-server-row__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-server-row .switch {
+  display: block;
+  cursor: pointer;
+}
+.mcp-server-row .switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mcp-server-row__remove {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.mcp-server-row__remove:hover {
+  background: rgba(200, 60, 60, 0.14);
+  color: #ff9f9f;
+}
+
+.mcp-footnote {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* ── MCP 新增表单 ── */
+.mcp-add-form {
+  margin: 0 0 10px;
+  padding: 12px 12px 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mcp-add-form__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.mcp-add-form__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mcp-add-form__row--top {
+  align-items: flex-start;
+}
+.mcp-add-form__row > span:first-child {
+  flex: 0 0 64px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.mcp-add-form__row input,
+.mcp-add-form__row textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel, #1d1d22);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+}
+.mcp-add-form__row textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+.mcp-add-form__error {
+  margin: 0;
+  font-size: 11px;
+  color: #ff9f9f;
+}
+.mcp-add-form__actions {
+  display: flex;
+  gap: 8px;
+}
+.mcp-add-form__submit,
+.mcp-add-form__cancel {
+  padding: 5px 12px;
+  font-size: 11.5px;
+  border-radius: var(--radius-sm);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.mcp-add-form__submit {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-subtle);
+}
+.mcp-add-form__submit:hover {
+  filter: brightness(1.1);
+}
+.mcp-add-form__cancel {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+}
+.mcp-add-form__cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}

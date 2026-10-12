@@ -28,6 +28,9 @@ Supported methods (M1 + M2):
             Params: messages, model?, maxTokens?, sessionId?, workspaceRoot?,
             systemPrompt?, images? (paths or attach: refs, attached to the last
             user message), useTools? (default false), maxLoop?.
+            2026-10-09 起：sessionId 指向项目会话时，工作目录默认取该会话的
+            project 目录、系统提示默认只列它挂的技能 —— 界面不必每轮自己带
+            （显式传的 workspaceRoot 仍然优先）。
     chat.cancel -> {"cancelled": bool}
     approval.respond -> {"accepted": bool}; params: approvalId, decision
             (allow_once | allow_always | deny)
@@ -56,8 +59,10 @@ import attachments  # noqa: E402
 import audit as audit_mod  # noqa: E402
 import chat_persist  # noqa: E402
 import context_mechanism  # noqa: E402
+import flows as flows_mod  # noqa: E402  (项目会话的"流程 skill"引擎)
 import guard  # noqa: E402
 import llm  # noqa: E402
+import logging_kit  # noqa: E402  (结构化日志 + 轮转 + 崩溃兜底，t_5dd44e42)
 import modelconfig  # noqa: E402
 import ocr_fallback  # noqa: E402
 import prompt_build  # noqa: E402
@@ -65,6 +70,9 @@ import read_extract  # noqa: E402
 import sessionstore  # noqa: E402
 import skills_registry  # noqa: E402  (skills.list RPC 的数据源)
 import tools  # noqa: E402
+import updater  # noqa: E402  (P0-2 程序更新：check/download/applyLocal)
+import error_taxonomy  # noqa: E402  (P0-5 自愈：四类错误 → 病历)
+import self_heal  # noqa: E402  (P0-5 自愈引擎：模型诊断/沙箱/应用/回滚/lessons)
 import reasoning_split  # noqa: E402  (思考/正文分流：只留正文)
 import providers.gen_tool  # noqa: E402,F401  (import 副作用：注册 image_generate 工具)
 import tools_web  # noqa: E402,F401  (import 副作用：注册 web_fetch / web_search 工具)
@@ -79,16 +87,38 @@ SIDECAR_CAPABILITIES: list[str] = [
     "models.list", "models.presets", "models.upsert", "models.remove",
     "models.setDefault", "models.fetch",
     "sessions.list", "sessions.create", "sessions.rename", "sessions.delete",
-    "sessions.messages", "messages.search",
+    "sessions.messages", "sessions.updateProject", "messages.search",
+    "flows.list", "flows.next",
     "usage.summary",
     "run.pending", "run.active", "run.interrupt", "run.dismiss",
+    "mcp.list", "mcp.toggle",
+    "mcp.describe", "mcp.upsert", "mcp.remove", "mcp.reload",
+    "heal.trigger", "heal.history",
 ]
 
 
 def log(level: str, msg: str) -> None:
-    """All logging goes to stderr. Never use print()."""
-    sys.stderr.write(f"[sidecar {time.strftime('%H:%M:%S')}] {level}: {msg}\n")
-    sys.stderr.flush()
+    """Structured logging (t_5dd44e42): JSONL file + stderr dual-write.
+
+    签名与老版完全一致（level, msg 两个位置参数），所有既有调用点零改动。
+    stderr 侧格式不变，Electron 调试管道不受影响。落盘失败永不抛。
+    """
+    logging_kit.get_logger().log(level, msg, source="python-sidecar")
+
+
+def _run_id_of_ctx(ctx) -> str | None:
+    return getattr(ctx, "run_id", None) or None
+
+
+def _session_id_of_ctx(ctx) -> str | None:
+    return getattr(ctx, "session_id", None) or None
+
+
+def log_ctx(level: str, msg: str, ctx, **kw) -> None:
+    """带 run/session 上下文的日志（agent 路径关键节点用）。"""
+    logging_kit.get_logger().log(
+        level, msg, source="python-sidecar",
+        run_id=_run_id_of_ctx(ctx), session_id=_session_id_of_ctx(ctx), **kw)
 
 
 def _active_provider() -> str | None:
@@ -684,6 +714,90 @@ def _memory_text():
         return None
 
 
+def _opt_str(value) -> str | None:
+    """RPC 参数里的「可选字符串」：空白串按没传处理（None）。
+
+    项目会话的参数全是可选的，界面会顺手把空输入框的值一起发上来，所以
+    「""」必须等于「没传」，不能当成一个合法的空名字走到校验里报错。
+    """
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _opt_list(value) -> list | None:
+    """RPC 参数里的「可选列表」：只认 JSON 数组形态，其余按没传处理。"""
+    return value if isinstance(value, list) else None
+
+
+def _session_project_wire(row) -> dict:
+    """会话行 -> wire 上的项目字段（camelCase）。
+
+    普通会话也走这里（kind 补 "chat"、其余 None/[]），界面就不必猜缺键 ——
+    「老会话没有这几个键」是这轮最容易踩的兼容坑。
+    """
+    row = row if isinstance(row, dict) else {}
+    skills = row.get("project_skills")
+    files = row.get("project_files")
+    return {
+        "kind": row.get("kind") or sessionstore.KIND_CHAT,
+        "projectName": row.get("project_name"),
+        "workspaceRoot": row.get("workspace_root"),
+        "projectSkills": skills if isinstance(skills, list) else [],
+        "projectFiles": files if isinstance(files, list) else [],
+    }
+
+
+def _project_session_row(session_id) -> dict | None:
+    """项目会话那一行；拿不到（没 id / 库没开 / 未知 id）一律返回 None。
+
+    这是**只读的旁路**：查不到不该影响一轮对话，降级成「不是项目会话」即可。
+    """
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None
+    try:
+        store = _session_store()
+        row = store.get_session(session_id) if store is not None else None
+    except Exception as exc:                    # noqa: BLE001 - 降级，不抛
+        log("warn", "project session lookup failed: %s" % exc)
+        return None
+    if not isinstance(row, dict):
+        return None
+    if (row.get("kind") or sessionstore.KIND_CHAT) != sessionstore.KIND_PROJECT:
+        return None
+    return row
+
+
+def _resolve_workspace(params_ws, session_id=None) -> str:
+    """工作目录优先级：请求显式 > 项目会话的 workspace_root > 配置 > ~。
+
+    2026-10-09 起项目会话把目录存在会话行上，界面不必每轮自己带；显式传的
+    workspaceRoot 永远优先（用户当轮临时切目录时不该被项目目录盖住）。
+    """
+    if isinstance(params_ws, str) and params_ws.strip():
+        return _base_dir(params_ws)
+    row = _project_session_row(session_id)
+    if row is not None:
+        root = row.get("workspace_root")
+        if isinstance(root, str) and root.strip():
+            return _base_dir(root)
+    return _base_dir(None)
+
+
+def _project_skills_of(session_id) -> list | None:
+    """项目会话挂了技能 -> 返回要保留的技能名；其余情况 None（= 全量）。
+
+    None 与 [] 语义不同：None = 「没有过滤要求，照旧全量」；空清单的会话也
+    归到 None —— 项目没挂技能时的行为必须与普通会话一字不差。
+    """
+    row = _project_session_row(session_id)
+    if row is None:
+        return None
+    skills = row.get("project_skills")
+    if not isinstance(skills, list):
+        return None
+    wanted = [s.strip() for s in skills if isinstance(s, str) and s.strip()]
+    return wanted or None
+
+
 def _base_dir(params_ws=None) -> str:
     """工具解析相对路径用的基准目录（「当前目录」口径，2026-09-25 起）。
 
@@ -1030,6 +1144,102 @@ def _handle_models_rpc(req_id, method: str, params: dict) -> dict:
     return _make_error_response(req_id, "BAD_METHOD", f"unknown method: {method}")
 
 
+def _flow_step_wire(step: dict) -> dict:
+    """给界面的步骤（camelCase；内部字段不外泄）。"""
+    out: dict = {"id": step.get("id"), "say": step.get("say"),
+                 "end": bool(step.get("end"))}
+    if isinstance(step.get("options"), list):
+        out["options"] = [{"label": o.get("label"), "value": o.get("value")}
+                          for o in step["options"]]
+    if isinstance(step.get("input"), dict):
+        inp = step["input"]
+        out["input"] = {"placeholder": inp.get("placeholder") or "",
+                        "optional": bool(inp.get("optional"))}
+    return out
+
+
+def _handle_flows_rpc(req_id, method: str, params: dict) -> dict:
+    """流程 RPC：项目会话「一问一答往下走」那套（定义在 resources/flows/）。
+
+    问答**真落进会话记录**（assistant 问、user 答）：一方面这符合"项目会话有自己
+    的记录"，另一方面下一轮真对话时模型能看到用户选过什么，不用再问一遍。
+    这里不调模型、不计 token（append_message 不动 usage 计数）。
+    """
+    if method == "flows.list":
+        defs = flows_mod.load_definitions()
+        return _make_ok_response(req_id, {
+            "flows": [flows_mod.public_definition(f) for f in defs.values()]})
+
+    flow_id = params.get("flowId")
+    if not isinstance(flow_id, str) or not flow_id.strip():
+        return _make_error_response(req_id, "BAD_REQUEST", "params.flowId is required")
+    try:
+        flow = flows_mod.get_flow(flow_id)
+    except flows_mod.FlowError as exc:
+        return _make_error_response(req_id, getattr(exc, "code", "BAD_REQUEST"), str(exc))
+
+    sid = params.get("sessionId") or params.get("id")
+    if not isinstance(sid, str) or not sid:
+        return _make_error_response(req_id, "BAD_REQUEST", "params.sessionId is required")
+    store = _session_store()
+    if store is None:
+        return _make_error_response(req_id, "STORE_UNAVAILABLE",
+                                    "sessions.db is not available")
+    if store.get_session(sid) is None:
+        return _make_error_response(req_id, "SESSION_NOT_FOUND", f"no such session: {sid}")
+
+    answer = params.get("answer")
+    answer = answer if isinstance(answer, str) else None
+    answers = params.get("answers")
+    answers = answers if isinstance(answers, dict) else {}
+    try:
+        out = flows_mod.advance(flow, step_id=_opt_str(params.get("stepId")),
+                               answer=answer, answers=answers,
+                               force=bool(params.get("force")))
+    except flows_mod.FlowError as exc:
+        return _make_error_response(req_id, getattr(exc, "code", "BAD_REQUEST"), str(exc))
+
+    def _append(role: str, content: str) -> None:
+        try:
+            store.append_message(sid, {"role": role, "content": content})
+        except Exception as exc:                # noqa: BLE001 - 落库失败不该挡住对话
+            log("warn", "flow message not persisted: %s" % exc)
+
+    kind = out["kind"]
+    if kind == "off_script":
+        # 用户没按剧本走：**什么都不写**、也不假装流程走完。界面拿到这个就把
+        # 他那句话按普通消息发出去，模型带着前面的问答记录接着聊。
+        return _make_ok_response(req_id, {
+            "kind": "off_script", "answers": out.get("answers") or {},
+            "reason": out.get("reason", "")})
+
+    if answer is not None:
+        _append("user", answer)
+
+    if kind == "retry":
+        warn = out.get("warn") or "这一条我没看懂，你再看看？"
+        _append("assistant", warn)
+        return _make_ok_response(req_id, {
+            "kind": "retry", "warn": warn, "answers": out.get("answers") or {},
+            # 把被拒的原话带回去：界面上那个「照样继续」要拿它再提交一次
+            # （force=true），不能替用户重打一遍。
+            "rejected": answer or "",
+            "step": _flow_step_wire(out["step"]), "options": out.get("options") or []})
+
+    # 开场白（只有起流程那一下有）：先招呼一句，再问第一件事，别一上来就抛问题。
+    greeting = out.get("greeting") or ""
+    if greeting:
+        _append("assistant", greeting)
+
+    step = out["step"]
+    _append("assistant", step["say"])
+    payload = {"kind": kind, "answers": out.get("answers") or {},
+               "step": _flow_step_wire(step)}
+    if kind == "done":
+        payload["prompt"] = out.get("prompt") or ""
+    return _make_ok_response(req_id, payload)
+
+
 def _handle_usage_rpc(req_id, method: str, params: dict) -> dict:
     """Usage aggregation RPC.
 
@@ -1068,7 +1278,7 @@ def _handle_sessions_rpc(req_id, method: str, params: dict) -> dict:
             # Soft-deleted rows stay recoverable, so the UI can ask for them.
             items = store.list_sessions(include_deleted=bool(params.get("includeDeleted")))
             return _make_ok_response(req_id, {
-                "sessions": [{
+                "sessions": [dict({
                     "id": it["id"],
                     "title": it["title"],
                     "updatedAt": it["updated_at"],
@@ -1078,7 +1288,7 @@ def _handle_sessions_rpc(req_id, method: str, params: dict) -> dict:
                     "messageCount": it["message_count"],
                     "totalInputTokens": it["total_input_tokens"],
                     "totalOutputTokens": it["total_output_tokens"],
-                } for it in items],
+                }, **_session_project_wire(it)) for it in items],
             })
         if method == "sessions.create":
             title = params.get("title")
@@ -1088,11 +1298,63 @@ def _handle_sessions_rpc(req_id, method: str, params: dict) -> dict:
             # when it is absent does the store mint one.
             wanted = params.get("sessionId")
             wanted = wanted if isinstance(wanted, str) and wanted.strip() else None
-            sid = store.create_session(
-                model=str(params.get("model") or "default"),
-                base_url=params.get("baseUrl") if isinstance(params.get("baseUrl"), str) else None,
-                title=title, session_id=wanted)
-            return _make_ok_response(req_id, {"id": sid, "title": title})
+            # 007 项目会话：这些参数**全是可选的** —— 一个都不传时行为与
+            # 2026-09-28 之前一字不差（kind 缺省 chat）。参数校验失败必须是
+            # BAD_REQUEST：语义错（名字空 / 目录不存在 / kind 非法）不该报成
+            # INTERNAL，否则界面只能给一句没用的提示。
+            try:
+                kind_v = _opt_str(params.get("kind"))
+                name_v = _opt_str(params.get("projectName"))
+                # 「项目会话必须有名字」这条在 RPC 边界上钉：数据层只保证
+                # kind 合法，名字空不空它不管，而没名字的项目会话在侧栏里就是
+                # 一行无字天书 —— 校验口径写在这里，界面拿到的是 BAD_REQUEST。
+                if (kind_v or sessionstore.KIND_CHAT) == sessionstore.KIND_PROJECT \
+                        and not name_v:
+                    return _make_error_response(
+                        req_id, "BAD_REQUEST",
+                        "projectName is required for a project session")
+                sid = store.create_session(
+                    model=str(params.get("model") or "default"),
+                    base_url=params.get("baseUrl") if isinstance(params.get("baseUrl"), str) else None,
+                    title=title, session_id=wanted,
+                    kind=kind_v,
+                    project_name=name_v,
+                    workspace_root=_opt_str(params.get("workspaceRoot")),
+                    project_skills=_opt_list(params.get("projectSkills")),
+                    project_files=_opt_list(params.get("projectFiles")))
+            except sessionstore.SessionValidationError as exc:
+                return _make_error_response(req_id, getattr(exc, "code", "BAD_REQUEST"),
+                                            str(exc))
+            row = store.get_session(sid) or {}
+            return _make_ok_response(req_id, dict(
+                {"id": sid, "title": title}, **_session_project_wire(row)))
+        if method == "sessions.updateProject":
+            # 007 项目会话的局部更新：只认传了的键（缺键 = 不动）。改名不许
+            # 把目录/技能一起清掉，所以这里不能「补齐默认值」再整行写回。
+            sid = params.get("sessionId") or params.get("id")
+            if not isinstance(sid, str) or not sid:
+                return _make_error_response(req_id, "BAD_REQUEST",
+                                            "params.sessionId is required")
+            kw: dict = {}
+            if "projectName" in params:
+                kw["project_name"] = params.get("projectName")
+            if "workspaceRoot" in params:
+                kw["workspace_root"] = params.get("workspaceRoot")
+            if "projectSkills" in params:
+                kw["project_skills"] = params.get("projectSkills")
+            if "projectFiles" in params:
+                kw["project_files"] = params.get("projectFiles")
+            try:
+                store.update_project(sid, **kw)
+            except sessionstore.SessionValidationError as exc:
+                return _make_error_response(req_id, getattr(exc, "code", "BAD_REQUEST"),
+                                            str(exc))
+            except LookupError:
+                return _make_error_response(req_id, "SESSION_NOT_FOUND",
+                                            f"no such session: {sid}")
+            row = store.get_session(sid) or {}
+            return _make_ok_response(req_id, dict({"id": sid},
+                                                  **_session_project_wire(row)))
         if method == "sessions.rename":
             sid = params.get("sessionId") or params.get("id")
             title = params.get("title")
@@ -1292,6 +1554,451 @@ def _vision_payload() -> dict:
     return dict(cfg) if isinstance(cfg, dict) else {}
 
 
+def _mcp_config_path() -> str:
+    """config.mcp.json 的位置：用户数据目录优先（design §2.2，与 sessions.db
+    同级），不存在时退回主 config.json（兼容把 mcp 段写进主配置的用法）。
+    两个都没有 → config.mcp.json 的路径（load_config 视为空表）。"""
+    user_path = os.path.join(_DATA_DIR, "config.mcp.json")
+    if os.path.exists(user_path):
+        return user_path
+    main_path = os.path.join(_tools_config_root(), "config.json")
+    if os.path.exists(main_path):
+        return main_path
+    return user_path
+
+
+def _sync_mcp(log_fn=log) -> dict:
+    """MCP server 起停 + 工具回灌。失败只降级（记日志），绝不挡主循环。"""
+    import mcp_tools
+    try:
+        summary = mcp_tools.sync_registry(_mcp_config_path(), log=log_fn)
+        if summary.get("tools"):
+            log_fn("INFO", "mcp: %d tool(s) registered from %d server(s)"
+                   % (summary["tools"], len(summary.get("servers", []))))
+        for skip in summary.get("skipped", []):
+            log_fn("WARN", "mcp: server %s skipped: %s"
+                   % (skip.get("name"), skip.get("reason")))
+        return summary
+    except Exception as exc:                 # noqa: BLE001 - MCP 永不挡启动
+        log_fn("WARN", "mcp sync failed: %s" % (exc,))
+        return {"servers": [], "tools": 0, "skipped": []}
+
+
+def _handle_mcp_rpc(req_id: str, method: str, params: dict) -> dict:
+    """mcp.list / mcp.toggle（P0-4）。
+
+    mcp.list  → {servers: [{name, transport, ready, dead, restarts, serverInfo}]}
+    mcp.toggle → 改 config.mcp.json 的 disabled/enabled（原子写），然后重同步
+                 （起/停 server、增删工具），返回与 mcp.list 同构状态。
+    """
+    import mcp_client
+    import mcp_tools
+
+    if method == "mcp.list":
+        return _make_ok_response(req_id, {"servers": mcp_tools.REGISTRY.status_list()})
+
+    if method == "mcp.toggle":
+        name = params.get("name")
+        enabled = params.get("enabled")
+        if not isinstance(name, str) or not name.strip():
+            return _make_error_response(req_id, "BAD_REQUEST",
+                                        "params.name is required")
+        if not isinstance(enabled, bool):
+            return _make_error_response(
+                req_id, "BAD_REQUEST",
+                "params.enabled is required and must be a boolean")
+        name = name.strip()
+        path = _mcp_config_path()
+        # 落盘点：优先 config.mcp.json；主 config.json 里已写了 mcp 段就写回主文件
+        target = path
+        write_main = False
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        if isinstance(raw, dict) and isinstance(raw.get("mcp"), dict):
+            write_main = True
+            servers = raw["mcp"].setdefault("servers", {})
+        else:
+            if os.path.abspath(target) == os.path.abspath(
+                    os.path.join(_tools_config_root(), "config.json")):
+                write_main = True
+                servers = raw.setdefault("mcp", {}).setdefault("servers", {})
+            else:
+                servers = raw.setdefault("servers", {})
+        if not isinstance(servers, dict) or not isinstance(servers.get(name), dict):
+            return _make_error_response(req_id, "NOT_FOUND",
+                                        "unknown mcp server: %s" % name)
+        entry = servers[name]
+        if write_main:
+            raw["mcp"]["servers"][name] = entry
+        # enabled/disabled 二选一表达：写 enabled（load_config 里优先）
+        entry["enabled"] = enabled
+        entry.pop("disabled", None)
+        # 原子写回（与 _persist_tools_disabled 同法：临时文件 + os.replace）
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        text = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+        fd, tmp = tempfile.mkstemp(prefix=".mcp-", suffix=".tmp",
+                                   dir=os.path.dirname(target) or ".")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            os.replace(tmp, target)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        _sync_mcp()
+        return _make_ok_response(req_id, {"servers": mcp_tools.REGISTRY.status_list()})
+
+    return _make_error_response(req_id, "BAD_METHOD", f"unknown method: {method}")
+
+
+def _mcp_admin_summary() -> dict:
+    """mcp.describe 的载荷：配置全集 + 运行时状态按名字合并。
+
+    mcp.list 只报有活跃会话的 server（停用的不出现），面板的开关需要
+    全集，所以 describe 自己读一遍配置再合并 REGISTRY 状态。
+    """
+    import mcp_client
+    import mcp_tools
+    runtime = {s["name"]: s for s in mcp_tools.REGISTRY.status_list()}
+    servers = []
+    skipped = []
+    try:
+        configs = mcp_client.load_config(_mcp_config_path())
+    except mcp_client.McpError as exc:
+        return {"servers": [], "skipped": [{"name": "", "reason": exc.message}]}
+    for name, cfg in configs.items():
+        rt = runtime.get(name, {})
+        servers.append({
+            "name": name,
+            "transport": cfg.transport,
+            "enabled": cfg.is_enabled,
+            "ready": bool(rt.get("ready", False)),
+            "dead": bool(rt.get("dead", False)),
+            "restarts": int(rt.get("restarts", 0)),
+            "serverInfo": rt.get("serverInfo", {}),
+            "command": cfg.command,
+            "url": cfg.url,
+            "toolCount": len(mcp_tools.REGISTRY._proxy_tools.get(name, [])),
+        })
+        if not cfg.is_enabled:
+            skipped.append({"name": name, "reason": "disabled"})
+    return {"servers": servers, "skipped": skipped}
+
+
+#: 凭证护栏：值里出现这些特征又不是 ${ENV} 占位符就拒绝 —— 明文密钥
+#: 不许落盘（真实值走 .env）。特征刻意收窄，宁可漏放行给用户自己纠正，
+#: 不可误伤普通参数值。
+_SECRET_RE = re.compile(
+    r"(sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16,}"
+    r"|Bearer\s+[A-Za-z0-9._-]{16,}|eyJ[A-Za-z0-9_-]{20,})")
+
+
+def _validate_mcp_secret_fields(name: str, entry: dict) -> None:
+    """env / headers / url 里的凭证字段只认 ${ENV} 形式；明文密钥报错。"""
+    import mcp_client
+    for field in ("env", "headers"):
+        values = entry.get(field)
+        if not isinstance(values, dict):
+            continue
+        for k, v in values.items():
+            text = str(v or "")
+            if _SECRET_RE.search(text):
+                raise mcp_client.McpError(
+                    "mcp server %s: %s.%s 的值看起来是明文密钥，配置里只允许 "
+                    "${ENV} 占位符，真实值请放 .env" % (name, field, k), "CONFIG_ERROR")
+    url = str(entry.get("url", "") or "")
+    if _SECRET_RE.search(url):
+        raise mcp_client.McpError(
+            "mcp server %s: url 含明文密钥，请改为 ${ENV} 占位符 + .env" % name,
+            "CONFIG_ERROR")
+
+
+def _load_mcp_doc() -> tuple:
+    """读落盘点（与 mcp.toggle 同一套语义）：返回 (raw, servers, target, write_main)。"""
+    import mcp_client
+    path = _mcp_config_path()
+    target = path
+    write_main = False
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+    if isinstance(raw, dict) and isinstance(raw.get("mcp"), dict):
+        write_main = True
+        servers = raw["mcp"].setdefault("servers", {})
+    else:
+        if os.path.abspath(target) == os.path.abspath(
+                os.path.join(_tools_config_root(), "config.json")):
+            write_main = True
+            servers = raw.setdefault("mcp", {}).setdefault("servers", {})
+        else:
+            servers = raw.setdefault("servers", {})
+    if not isinstance(servers, dict):
+        raise mcp_client.McpError("mcp config 'servers' must be an object",
+                                  "CONFIG_ERROR")
+    return raw, servers, target, write_main
+
+
+def _save_mcp_doc(raw: dict, target: str) -> None:
+    """原子写回（与 _persist_tools_disabled 同法：临时文件 + os.replace）。"""
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    text = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+    fd, tmp = tempfile.mkstemp(prefix=".mcp-", suffix=".tmp",
+                               dir=os.path.dirname(target) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _handle_mcp_admin_rpc(req_id: str, method: str, params: dict) -> dict:
+    """mcp.describe / mcp.upsert / mcp.remove / mcp.reload（t_d295723c）。
+
+    mcp.list / mcp.toggle 的契约一字不动；这里是纯增量：
+      describe → {servers: [{name,transport,enabled,ready,dead,restarts,
+                             serverInfo,command,url,toolCount}], skipped}
+      upsert   → params {name, server: {...}}；字段校验 + 凭证护栏后原子写回，
+                 重同步，返回 describe 载荷
+      remove   → params {name}；删除 + 重同步（停进程/摘工具），返回 describe 载荷
+      reload   → 重同步（用户改了 .env 后手动触发），返回 describe 载荷
+    """
+    import mcp_client
+    import mcp_tools
+
+    if method == "mcp.describe":
+        return _make_ok_response(req_id, _mcp_admin_summary())
+
+    if method == "mcp.upsert":
+        name = params.get("name")
+        server = params.get("server")
+        if not isinstance(name, str) or not name.strip():
+            return _make_error_response(req_id, "BAD_REQUEST",
+                                        "params.name is required")
+        if not isinstance(server, dict):
+            return _make_error_response(req_id, "BAD_REQUEST",
+                                        "params.server is required")
+        name = name.strip()
+        try:
+            _validate_mcp_secret_fields(name, server)
+            # parse_server_config 做字段类型校验；必填校验（stdio 要 command、
+            # http 要 url）在 load_config 里，这里补齐同等规则
+            cfg = mcp_client.parse_server_config(name, server)
+            if cfg.transport == "stdio" and not cfg.command:
+                raise mcp_client.McpError(
+                    "mcp server %s: stdio transport requires 'command'" % name,
+                    "CONFIG_ERROR")
+            if cfg.transport == "http" and not cfg.url:
+                raise mcp_client.McpError(
+                    "mcp server %s: http transport requires 'url'" % name,
+                    "CONFIG_ERROR")
+        except mcp_client.McpError as exc:
+            return _make_error_response(req_id, "CONFIG_ERROR", exc.message)
+        try:
+            raw, servers, target, write_main = _load_mcp_doc()
+        except mcp_client.McpError as exc:
+            return _make_error_response(req_id, "CONFIG_ERROR", exc.message)
+        entry = {k: v for k, v in server.items()
+                 if k not in ("disabled",)}          # 统一 enabled 表达
+        entry["enabled"] = bool(server.get("enabled", True))
+        servers[name] = entry
+        if write_main:
+            raw["mcp"]["servers"] = servers
+        try:
+            _save_mcp_doc(raw, target)
+        except OSError as exc:
+            return _make_error_response(req_id, "IO_ERROR",
+                                        "写入配置失败: %s" % exc)
+        _sync_mcp()
+        return _make_ok_response(req_id, _mcp_admin_summary())
+
+    if method == "mcp.remove":
+        name = params.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return _make_error_response(req_id, "BAD_REQUEST",
+                                        "params.name is required")
+        name = name.strip()
+        try:
+            raw, servers, target, write_main = _load_mcp_doc()
+        except mcp_client.McpError as exc:
+            return _make_error_response(req_id, "CONFIG_ERROR", exc.message)
+        if not isinstance(servers.get(name), dict):
+            return _make_error_response(req_id, "NOT_FOUND",
+                                        "unknown mcp server: %s" % name)
+        servers.pop(name, None)
+        if write_main:
+            raw["mcp"]["servers"] = servers
+        try:
+            _save_mcp_doc(raw, target)
+        except OSError as exc:
+            return _make_error_response(req_id, "IO_ERROR",
+                                        "写入配置失败: %s" % exc)
+        _sync_mcp()               # 重同步里 _teardown_server 负责停进程 + 摘工具
+        return _make_ok_response(req_id, _mcp_admin_summary())
+
+    if method == "mcp.reload":
+        _sync_mcp()
+        return _make_ok_response(req_id, _mcp_admin_summary())
+
+    return _make_error_response(req_id, "BAD_METHOD", f"unknown method: {method}")
+
+
+def _handle_heal_rpc(req_id: str, method: str, params: dict) -> dict:
+    """heal.* RPC（P0-5 自愈）：trigger（界面/自动触发同一条路）/ history。"""
+    if method == "heal.history":
+        history_path = os.path.join(_DATA_DIR, self_heal.HISTORY_FILENAME)
+        history = []
+        try:
+            with open(history_path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if isinstance(raw, list):
+                history = raw[-50:]
+        except (OSError, ValueError):
+            history = []
+        return _make_ok_response(req_id, {"history": history,
+                                          "budget": self_heal.SAME_ERROR_BUDGET})
+    if method == "heal.trigger":
+        # 手动/自动同一入口：type 四选一，带上原始错误上下文。
+        kind = str(params.get("kind") or "")
+        if kind not in error_taxonomy.ERROR_KINDS:
+            return _make_error_response(
+                req_id, "BAD_REQUEST",
+                "params.kind must be one of %s" % ", ".join(
+                    error_taxonomy.ERROR_KINDS))
+        workspace = _resolve_workspace(params.get("workspaceRoot"),
+                                       session_id=params.get("sessionId"))
+        facts = error_taxonomy.ErrorFacts(
+            kind=kind,
+            source=str(params.get("source") or "sidecar"),
+            run_id=params.get("runId") or None,
+            session_id=params.get("sessionId") or None,
+            code=str(params.get("code") or ""),
+            message=str(params.get("message") or "")[:800],
+            traceback=str(params.get("traceback") or "")[:4000],
+            context=params.get("context") if isinstance(
+                params.get("context"), dict) else {},
+            input_summary=str(params.get("inputSummary") or "")[:1200])
+        engine = _make_heal_engine(workspace, run_id=str(params.get("runId") or ""))
+        outcome = engine.heal(facts, trigger=str(params.get("trigger") or "manual"))
+        # 界面/日志都看得到完整链路：病历 -> 建议 -> 验证 -> 是否应用
+        log("INFO" if outcome.applied else "WARN",
+            "self heal %s/%s -> %s%s" % (facts.kind, facts.code, outcome.stage,
+                                         (": " + outcome.failure_reason)
+                                         if outcome.failure_reason else ""))
+        return _make_ok_response(req_id, {"outcome": outcome.to_dict()})
+    return _make_error_response(req_id, "BAD_REQUEST",
+                                "unknown heal method: %s" % method)
+
+
+def _make_heal_engine(workspace_root: str, *, run_id: str = "") -> "self_heal.SelfHealEngine":
+    """装一个自愈引擎：诊断模型用当前对话配置（llm.chat_once）。"""
+    def _ask_model(prompt: str) -> str:
+        try:
+            cfg = _chat_config()
+        except Exception:
+            return ""                      # 配置坏了 → 引擎自然走 failed 分支
+        return llm.chat_once(cfg, prompt)  # LlmError 由引擎兜底
+    sinks = []
+    lessons = _lessons_store()
+    if lessons is not None:
+        sinks.append(lessons)
+    return self_heal.SelfHealEngine(
+        ask_model=_ask_model, workspace_root=workspace_root,
+        lesson_sinks=sinks, data_dir=_DATA_DIR,
+        auto_apply=True, log=log, run_id=run_id)
+
+
+_HEAL_AUTO_TRIGGERS: set = set()    # run 内已自动触发过的 kind+code（自动路径单次）
+_HEAL_LOCK = threading.Lock()
+
+
+def _maybe_auto_heal(ctx, deps, *, kind: str, code: str, message: str,
+                     traceback_text: str = "", context: dict | None = None) -> None:
+    """工具失败/模型异常时自动触发一次自愈（P0-5 §2：可自动触发）。
+
+    防抖：同一 run 同一 kind+code 只自动触发一次；依赖缺失只在事件里给
+    fix_hint（不调模型）；全部 try/except，自愈绝不连坐对话。
+    """
+    if kind == error_taxonomy.KIND_DEPENDENCY_MISSING:
+        dep = str((context or {}).get("dependency") or "")
+        if dep:
+            try:
+                _emit("chat.notice", {"id": "", "code": "DEP_MISSING",
+                                      "dependency": dep,
+                                      "fixHint": error_taxonomy.dependency_fix_hint(dep)})
+            except Exception:               # noqa: BLE001
+                pass
+        return
+    key = "%s/%s" % (kind, code)
+    with _HEAL_LOCK:
+        if key in _HEAL_AUTO_TRIGGERS:
+            return
+        _HEAL_AUTO_TRIGGERS.add(key)
+    try:
+        facts = error_taxonomy.ErrorFacts(
+            kind=kind, source="agent_loop",
+            run_id=(getattr(deps, "run_id", "") or None),
+            session_id=(getattr(ctx, "session_id", None) or None),
+            code=code, message=str(message)[:800],
+            traceback=str(traceback_text or "")[:4000],
+            context=dict(context or {}),
+            input_summary=error_taxonomy._clip(_last_user_text(ctx.messages), 1200))
+        engine = _make_heal_engine(getattr(ctx, "workspace_root", "") or ".",
+                                   run_id=(getattr(deps, "run_id", "") or ""))
+        outcome = engine.heal(facts, trigger="auto")
+        _emit("chat.heal", {"id": "", "outcome": outcome.to_dict(),
+                            "trigger": "auto"})
+        log("INFO" if outcome.applied else "WARN",
+            "auto heal %s -> %s%s" % (key, outcome.stage,
+                                      (" (" + outcome.failure_reason + ")")
+                                      if outcome.failure_reason else ""))
+    except Exception as exc:                 # noqa: BLE001 - 自愈永不连坐
+        log("WARN", "auto heal failed: %s" % exc)
+
+
+def _handle_update_rpc(req_id: str, method: str, params: dict) -> dict:
+    """update.* RPC（P0-2）：status / check / download / apply / applyLocal。
+
+    check 是「静默降级」语义（失败不抛、available=false+error）；
+    apply/applyLocal 内部已含校验-拒绝与自动回滚，失败返回 UPDATE_*
+    错误码，错误详情进结构化日志（source=updater）。
+    """
+    if method == "update.status":
+        return _make_ok_response(req_id, updater.status())
+    if method == "update.check":
+        return _make_ok_response(req_id, updater.check())
+    if method == "update.download":
+        return _make_ok_response(req_id, updater.download())
+    if method == "update.apply":
+        return _make_ok_response(req_id, updater.apply())
+    if method == "update.applyLocal":
+        path = params.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return _make_error_response(req_id, "BAD_REQUEST",
+                                        "params.path must be a non-empty string")
+        try:
+            return _make_ok_response(req_id, updater.apply_local(path.strip()))
+        except updater.UpdaterError as e:
+            log("warn", f"update.applyLocal rejected: {e.code}: {e.message}")
+            return _make_error_response(req_id, "UPDATE_" + e.code, e.message)
+        except Exception as exc:                      # noqa: BLE001 - RPC 兜底
+            log("error", f"update.applyLocal crashed: {exc}")
+            return _make_error_response(req_id, "UPDATE_INTERNAL", str(exc))
+    return _make_error_response(req_id, "BAD_METHOD", f"unknown method: {method}")
+
+
 def _handle_vision_rpc(req_id: str, method: str, params: dict) -> dict:
     """vision.get / vision.set —— 设置页那条「读图走哪个模型」。
 
@@ -1407,6 +2114,7 @@ def _skills_list_payload() -> dict:
                 "name": skill.name,
                 "description": skill.description,
                 "whenToUse": skill.when_to_use,
+                "bodyChars": len(skill.body or ""),
                 "version": skill.version,
                 "author": skill.author,
                 "sourceDir": skill.source_dir,
@@ -1616,9 +2324,26 @@ def handle_request(req: dict) -> dict:
     if method in ("vision.get", "vision.set"):
         return _handle_vision_rpc(req_id, method, params)
 
+    if method in ("update.status", "update.check", "update.download",
+                  "update.apply", "update.applyLocal"):
+        return _handle_update_rpc(req_id, method, params)
+
+    if method in ("mcp.list", "mcp.toggle"):
+        return _handle_mcp_rpc(req_id, method, params)
+
+    if method in ("mcp.describe", "mcp.upsert", "mcp.remove", "mcp.reload"):
+        return _handle_mcp_admin_rpc(req_id, method, params)
+
+    if method in ("heal.trigger", "heal.history"):
+        return _handle_heal_rpc(req_id, method, params)
+
     if method in ("sessions.list", "sessions.create", "sessions.rename",
-                  "sessions.delete", "sessions.messages", "messages.search"):
+                  "sessions.delete", "sessions.messages", "sessions.updateProject",
+                  "messages.search"):
         return _handle_sessions_rpc(req_id, method, params)
+
+    if method in ("flows.list", "flows.next"):
+        return _handle_flows_rpc(req_id, method, params)
 
     if method == "usage.summary":
         return _handle_usage_rpc(req_id, method, params)
@@ -1653,8 +2378,41 @@ def emit_hello_event() -> dict:
     }
 
 
+def _configure_logging() -> None:
+    """t_5dd44e42：初始化结构化日志单例（级别/目录/保留期可配）。
+
+    优先级：DESK_AGENT_LOG_DIR/DESK_AGENT_LOG_LEVEL 环境变量 > config.json
+    logging 段 > 默认（data/logs/, info, 7 天）。任何配置错误都回退默认，
+    绝不挡启动。之后挂 sys/threading excepthook 双保险。
+    """
+    lvl = os.environ.get("DESK_AGENT_LOG_LEVEL") or ""
+    log_dir = (os.environ.get("DESK_AGENT_LOG_DIR") or "").strip() or None
+    retention = logging_kit.DEFAULT_RETENTION_DAYS
+    try:
+        sec = appconfig.section("logging", {}) or {}
+        if not lvl and isinstance(sec.get("level"), str):
+            lvl = sec["level"]
+        if log_dir is None and isinstance(sec.get("logDir"), str) and sec["logDir"].strip():
+            log_dir = sec["logDir"].strip()
+        if isinstance(sec.get("retentionDays"), int):
+            retention = sec["retentionDays"]
+    except Exception as e:                        # pragma: no cover - 配置坏
+        sys.stderr.write("[sidecar] logging config unreadable: %s\n" % (e,))
+    try:
+        logging_kit.configure(_DATA_DIR, level=lvl.strip() or None,
+                              log_dir_override=log_dir,
+                              retention_days=retention)
+    except logging_kit.LogConfigError as e:
+        sys.stderr.write("[sidecar] bad log level %r, fallback info\n" % (e,))
+        logging_kit.configure(_DATA_DIR, log_dir_override=log_dir,
+                              retention_days=retention)
+    logging_kit.install_excepthooks()
+
+
 def main() -> int:
+    _configure_logging()
     log("INFO", f"sidecar starting (pid={os.getpid()}, protocolVersion={SIDECAR_PROTOCOL_VERSION})")
+    log("INFO", f"log dir: {logging_kit.get_logger().log_dir}")
     # key 只从环境变量 / .env 读：先把 .env 灌进进程环境，界面上的
     # 「已配置 / 还没配」才和实际能不能调通一致。只报键数，不回显值。
     loaded = modelconfig.load_env_file()
@@ -1690,6 +2448,11 @@ def main() -> int:
     except Exception as e:  # pragma: no cover - 配置读不出来
         log("WARN", "tools disabled loading failed: %s" % (e,))
 
+    # MCP（P0-4）：读配置、起 server、工具回灌。放后台线程 —— stdio server
+    # 启动超时兜底是 10s，同步做会拖慢 hello 帧；工具注册晚几秒无碍
+    # （模型首个 tool 调用前 tools.schemas() 已含）。失败只降级记日志。
+    threading.Thread(target=_sync_mcp, daemon=True, name="mcp-sync").start()
+
     # guard 模型层预热（2026-10-01 冷启动修复）：后台线程 spawn DecisionBert
     # 子进程 + 一条哑推理，把冷启动的几秒从第一条真实命令挪到启动期。
     # 默认开（config.json guard 段 model_warmup=false 只关预热；整层关用
@@ -1716,24 +2479,33 @@ def main() -> int:
 
     # Main loop.
     raw_stdin = sys.stdin.buffer
-    while True:
+    try:
+        while True:
+            try:
+                req = read_frame(raw_stdin)
+            except ProtocolError as e:
+                log("INFO", f"stdin closed or protocol error: {e}; exiting")
+                return 0
+            if req.get("type") != "req":
+                log("WARN", f"ignoring non-request frame type={req.get('type')}")
+                continue
+            try:
+                write_frame(handle_request(req))
+            except Exception as e:
+                log("ERROR", f"handler error: {e}")
+                continue
+    finally:
+        # MCP（P0-4）：进程退出前对 stdio server 发 shutdown 通知再 kill，
+        # 不留孤儿子进程。失败只记日志（退出路径不再抛）。
         try:
-            req = read_frame(raw_stdin)
-        except ProtocolError as e:
-            log("INFO", f"stdin closed or protocol error: {e}; exiting")
-            return 0
-        if req.get("type") != "req":
-            log("WARN", f"ignoring non-request frame type={req.get('type')}")
-            continue
-        try:
-            write_frame(handle_request(req))
-        except Exception as e:
-            log("ERROR", f"handler error: {e}")
-            continue
+            import mcp_tools
+            mcp_tools.REGISTRY.shutdown_all()
+        except Exception as e:  # pragma: no cover - 退出路径兜底
+            log("WARN", f"mcp shutdown failed: {e}")
 
 
 def _system_prompt_for(workspace_root: str, memory: str | None = None,
-                       cfg=None) -> str:
+                       cfg=None, allowed_skills: list | None = None) -> str:
     """Orchestration: base role + identity + skills + tools + project rules.
 
     (design doc 281-285). The renderer's old two-line prompt is deliberately
@@ -1741,6 +2513,10 @@ def _system_prompt_for(workspace_root: str, memory: str | None = None,
     end cannot drift apart. Everything below degrades to "that layer absent"
     rather than a crash: a missing skills registry, no identity file, or a
     workspace without AGENTS.md all just render fewer sections.
+
+    ``allowed_skills``（2026-10-09）：项目会话挂了技能时，只列这些（挂在项目上
+    的技能名）；None = 不设限，行为与老会话一字不差。挂了个不存在的技能名只
+    是列不出来，不报错 —— 技能可能在磁盘上被删掉。
     """
     skills = []
     try:
@@ -1748,6 +2524,9 @@ def _system_prompt_for(workspace_root: str, memory: str | None = None,
         skills = skills_registry.list_skills()
     except Exception as exc:                    # missing module or unreadable dir
         log("warn", "skills scan unavailable: %s" % exc)
+    if allowed_skills is not None:
+        wanted = {s for s in allowed_skills if isinstance(s, str)}
+        skills = [s for s in skills if getattr(s, "name", None) in wanted]
     try:
         tool_list = tools.list_tools()
     except Exception as exc:                    # pragma: no cover - defensive
@@ -1839,8 +2618,9 @@ def _subagent_schemas() -> list:
 
 def _make_subagent_runner(*, cfg, cancel, session_id, window):
     """造一个 run_node：引擎调它跑一个节点的完整循环。"""
-    ws = _base_dir(None)
-    prompt = _system_prompt_for(ws, memory=_memory_text(), cfg=cfg)
+    ws = _resolve_workspace(None, session_id=session_id)
+    prompt = _system_prompt_for(ws, memory=_memory_text(), cfg=cfg,
+                                allowed_skills=_project_skills_of(session_id))
     model = model_name_for_chat(cfg)
     node_max_loop = int(_subagent_config().get("nodeMaxLoop") or _SUBAGENT_NODE_MAX_LOOP)
     schemas = _subagent_schemas()
@@ -2034,13 +2814,20 @@ def _run_chat(req_id, params) -> None:
                              "message": str(e)})
         return
 
+    # 007 项目会话：工作目录与技能过滤都从会话行解出来（2026-10-09）。界面对
+    # 项目会话不必每轮自己带 workspaceRoot；显式传的仍然优先。普通会话这条路
+    # 走完等于老行为（_resolve_workspace 落到配置、过滤器为 None）。
+    _project_ws = _resolve_workspace(params.get("workspaceRoot"),
+                                     session_id=params.get("sessionId"))
+    _skills_filter = _project_skills_of(params.get("sessionId"))
     ctx = agent_loop.LoopContext(
         messages=list(messages),
         session_id=params.get("sessionId"),
-        workspace_root=_base_dir(params.get("workspaceRoot")),
-        system_prompt=_system_prompt_for(_base_dir(params.get("workspaceRoot")),
+        workspace_root=_project_ws,
+        system_prompt=_system_prompt_for(_project_ws,
                                          memory=_memory_text(),
-                                         cfg=resolved_cfg),
+                                         cfg=resolved_cfg,
+                                         allowed_skills=_skills_filter),
         model=params.get("model"),
         max_tokens=params.get("maxTokens"),
         use_tools=bool(params.get("useTools", False)),
@@ -2080,6 +2867,15 @@ def _run_chat(req_id, params) -> None:
         run_id=(run_rec or {}).get("run_id", ""),
         checkpoint=_checkpoint_handler(run_rec["run_id"]) if run_rec else None,
     )
+    # P0-5 自愈：循环里的出错现场（工具失败/模型异常）自动触发诊断。
+    # _maybe_auto_heal 自吞异常 + 同 run 同错误只触发一次，绝不连坐对话。
+    deps.on_error = lambda payload: _maybe_auto_heal(
+        ctx, deps,
+        kind=str(payload.get("kind") or ""),
+        code=str(payload.get("code") or ""),
+        message=str(payload.get("message") or ""),
+        traceback_text=str(payload.get("traceback") or ""),
+        context=payload.get("context") if isinstance(payload.get("context"), dict) else None)
     # 子代理（2026-09-26）：这一轮对话的委托器挂到本线程上（见 _make_delegator）。
     # 工具在同一个线程里执行，所以 delegate 拿到的就是这一轮自己的引擎。
     tools.set_delegate_session(session_id)
@@ -2209,8 +3005,12 @@ def _run_chat(req_id, params) -> None:
             import artifacts as artifacts_mod
             _cap_rows = list(tool_capture.values())
             _turn_text = "".join(text_parts)
+            # 2026-10-09 修：这里原写 workspace_root=ws，而该作用域里根本没有
+            # ws（NameError 被下面 except 吞掉 → 附件收集一直静默失败、日志里
+            # 只有一句 artifact collect failed: name 'ws' is not defined）。
+            # 正确来源是这一轮的 ctx.workspace_root。
             turn_artifacts = artifacts_mod.collect(
-                _cap_rows, _turn_text, workspace_root=ws)
+                _cap_rows, _turn_text, workspace_root=ctx.workspace_root)
         except Exception as e:  # noqa: BLE001
             log("WARN", "artifact collect failed: %r" % (e,))
             turn_artifacts = []
@@ -2246,10 +3046,24 @@ def _run_chat(req_id, params) -> None:
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except SystemExit:
+        # 正常退出路径（main() return 的 sys.exit）—— 不是 crash，直接放行
+        raise
     except BrokenPipeError:
         log("INFO", "stdout pipe closed by peer")
         sys.exit(0)
     except KeyboardInterrupt:
         log("INFO", "interrupted")
         sys.exit(0)
+    except BaseException as e:            # t_5dd44e42：崩溃兜底
+        # main() 内部异常（含 _configure_logging 之前的早期失败）：完整
+        # traceback 落 crash 文件 + critical 日志，再按崩溃码退出。
+        import traceback as _tb
+        try:
+            logging_kit.get_logger().crash_dump(
+                title="sidecar main crashed: %s" % type(e).__name__,
+                traceback_text=_tb.format_exc(), source="python-sidecar")
+        except Exception:
+            sys.stderr.write(_tb.format_exc())
+        sys.exit(86)
 

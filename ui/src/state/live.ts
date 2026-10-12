@@ -15,7 +15,7 @@
  *   chat.done         { finishReason, usage, rounds, toolCallsRun, reasoningChars, textChars }
  *   chat.error        { id, code, message }
  */
-import type { SkillListPayload, ToolListPayload } from '../types';
+import type { McpDescribePayload, SkillListPayload, ToolListPayload } from '../types';
 
 export interface SidecarStatus {
   state: string;
@@ -57,6 +57,16 @@ export interface AgentApi {
   skills?(): Promise<SkillListPayload>;
   /** 技能与工具面板：切换某个工具的启用状态，返回刷新后的 tools 载荷。 */
   toolSetEnabled?(payload: { name: string; enabled: boolean }): Promise<ToolListPayload>;
+  /** MCP 页签：server 全集（配置 + 运行时状态）。 */
+  mcpDescribe?(): Promise<McpDescribePayload>;
+  /** MCP 页签：新增/更新一个 server，返回 describe 同构载荷。 */
+  mcpUpsert?(payload: { name: string; server: Record<string, unknown> }): Promise<McpDescribePayload>;
+  /** MCP 页签：删除一个 server，返回 describe 同构载荷。 */
+  mcpRemove?(payload: { name: string }): Promise<McpDescribePayload>;
+  /** MCP 页签：改完 .env 后重同步，返回 describe 同构载荷。 */
+  mcpReload?(): Promise<McpDescribePayload>;
+  /** MCP 页签：启停一个 server（走 mcp.toggle），返回 mcp.list 载荷。 */
+  mcpToggle?(payload: { name: string; enabled: boolean }): Promise<McpDescribePayload>;
   chat(params: Record<string, unknown>): Promise<{ chatId: string }>;
   cancel(chatId: string): Promise<unknown>;
   approval(approvalId: string, decision: string): Promise<unknown>;

@@ -22,9 +22,12 @@
  *   invoke  agent:sessions         -> sessions.list (the sidebar's rows)
  *   invoke  agent:sessionCreate    -> { id, title } (caller may pass sessionId)
  *   invoke  agent:sessionRename    -> { sessionId, title }
+ *   invoke  agent:sessionUpdateProject -> sessions.updateProject (project session meta)
  *   invoke  agent:sessionDelete    -> { sessionId }
  *   invoke  agent:sessionMessages  -> one session's messages, in order
  *   invoke  agent:messagesSearch   -> { query, sessionId? } FTS5 hits
+ *   invoke  agent:flowsList        -> resources/flows/ 下的流程定义
+ *   invoke  agent:flowsNext        -> 项目会话流程走一步（问答落库，不调模型）
  *   invoke  agent:usage            -> token/money aggregation (bar + usage page)
  *   on      agent:event       -> every sidecar evt frame, { chatId, event, data }
  *   on      agent:status      -> status transitions
@@ -36,9 +39,24 @@ import { randomUUID } from "crypto";
 import { SidecarClient } from "./sidecarClient";
 import { StdioTransport } from "./stdioTransport";
 import { defaultDeps } from "./deps";
+import { LogSink, crashGuards, realLogDeps } from "./logSink";
 
 let mainWindow: BrowserWindow | null = null;
 let client: SidecarClient | null = null;
+// t_5dd44e42：Electron 主进程结构化日志。userData 在 app ready 前不可用，
+// 所以 sink 是惰性 getter——首个日志请求时才落到 <userData>/logs/。
+let mainLogSink: LogSink | null = null;
+function logSink(): LogSink {
+  if (!mainLogSink) {
+    mainLogSink = new LogSink(
+      path.join(app.getPath("userData"), "logs"),
+      realLogDeps,
+      LogSink.resolveLevel(process.env.DESK_AGENT_LOG_LEVEL),
+    );
+  }
+  return mainLogSink;
+}
+
 
 /**
  * The project root: the directory that contains `python/` and `electron/`.
@@ -585,6 +603,15 @@ function createWindow(): void {
 }
 
 function pushStatus(status: unknown): void {
+  // t_5dd44e42：sidecar 状态变化（含 exit code 非 0 的崩溃转报）留日志。
+  try {
+    const s = status as { state?: string; lastError?: { code?: string; message?: string } };
+    if (s && s.state && (s.state === "crashed" || s.state === "restarting" || s.state === "dead")) {
+      logSink().log(s.state === "restarting" ? "warn" : "error",
+        `sidecar status: ${s.state}`,
+        { source: "electron", data: s.lastError ?? undefined });
+    }
+  } catch { /* 日志永不连坐 */ }
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("agent:status", status);
 }
@@ -602,6 +629,7 @@ function requireClient(): SidecarClient {
 
 async function bootstrap(): Promise<void> {
   const { command, args } = getSidecarCommand();
+  logSink().info("bootstrap: starting sidecar", { data: { command } });
   client = new SidecarClient({
     transportFactory: () => new StdioTransport({
       command,
@@ -649,6 +677,19 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("agent:skills", async () => requireClient().request("skills.list"));
   ipcMain.handle("agent:toolToggle", async (_e, input?: Record<string, unknown>) =>
     requireClient().request("tools.setEnabled", input ?? {}));
+  // MCP server management (t_d295723c): all five thin-pass to the sidecar RPCs.
+  // The responses come back verbatim, so the renderer gets { servers, skipped }
+  // in one round-trip per action.
+  ipcMain.handle("agent:mcpDescribe", async () =>
+    requireClient().request("mcp.describe"));
+  ipcMain.handle("agent:mcpUpsert", async (_e, input?: Record<string, unknown>) =>
+    requireClient().request("mcp.upsert", input ?? {}));
+  ipcMain.handle("agent:mcpRemove", async (_e, input?: Record<string, unknown>) =>
+    requireClient().request("mcp.remove", input ?? {}));
+  ipcMain.handle("agent:mcpReload", async () =>
+    requireClient().request("mcp.reload"));
+  ipcMain.handle("agent:mcpToggle", async (_e, input?: Record<string, unknown>) =>
+    requireClient().request("mcp.toggle", input ?? {}));
 
   // Model registry lives in the sidecar (config.json + env keys). The renderer
   // never sees a key value, only whether the env var is set.
@@ -731,12 +772,21 @@ async function bootstrap(): Promise<void> {
     requireClient().request("sessions.create", payload));
   ipcMain.handle("agent:sessionRename", async (_e, payload?: Record<string, unknown>) =>
     requireClient().request("sessions.rename", payload));
+  // Project sessions (contract v1 §1.2): partial update of the project fields
+  // on a session row. Payload { sessionId, projectName?, workspaceRoot?,
+  // projectSkills?, projectFiles? } — only sent keys are touched.
+  ipcMain.handle("agent:sessionUpdateProject", async (_e, payload?: Record<string, unknown>) =>
+    requireClient().request("sessions.updateProject", payload));
   ipcMain.handle("agent:sessionDelete", async (_e, payload?: Record<string, unknown>) =>
     requireClient().request("sessions.delete", payload));
   ipcMain.handle("agent:sessionMessages", async (_e, payload?: Record<string, unknown>) =>
     requireClient().request("sessions.messages", payload));
   ipcMain.handle("agent:messagesSearch", async (_e, payload?: Record<string, unknown>) =>
     requireClient().request("messages.search", payload));
+  // 项目会话的"流程"（一问一答）：定义在仓里 resources/flows/，问答落进会话记录。
+  ipcMain.handle("agent:flowsList", async () => requireClient().request("flows.list"));
+  ipcMain.handle("agent:flowsNext", async (_e, payload?: Record<string, unknown>) =>
+    requireClient().request("flows.next", payload));
 
   // Usage aggregation. Both the bottom status bar and the 用量统计 page read
   // this one method, so the two can never disagree about the same tokens.
@@ -838,6 +888,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // t_5dd44e42：主进程崩溃兜底——uncaughtException/unhandledRejection 的
+    // stack 落 crash-<ts>.log。这里不接管退出：Electron 默认行为（崩溃 dialog）
+    // 保留，sidecar 重启逻辑在 SidecarClient 里各管各的。
+    crashGuards(logSink());
+    logSink().info("app ready", { data: { version: app.getVersion(), platform: process.platform } });
     createWindow();
     bootstrap();
     app.on("activate", () => {

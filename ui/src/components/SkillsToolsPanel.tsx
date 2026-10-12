@@ -10,12 +10,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAgent } from '../state/live';
-import type { SkillInfo, ToolEntry } from '../types';
+import type { McpDescribePayload, McpServerEntry, SkillInfo, ToolEntry } from '../types';
 import { Icon } from './Icon';
 import { toolCopyOf } from './toolCopy.zh';
 import './SkillsToolsPanel.css';
 
-type TabKey = 'tools' | 'skills';
+type TabKey = 'tools' | 'skills' | 'mcp';
 
 type LoadPhase = 'loading' | 'ready' | 'unavailable' | 'error';
 
@@ -32,10 +32,17 @@ interface SkillsState {
   message: string;
 }
 
+interface McpState {
+  phase: LoadPhase;
+  items: McpServerEntry[];
+  message: string;
+}
+
 const ERR_BRIDGE = '未连接本地服务，工具与技能信息不可用。请通过应用启动。';
 const ERR_FETCH = '信息加载失败，请稍后重试。';
 const EMPTY_TOOLS = '暂无可用工具。';
 const EMPTY_SKILLS = '暂无已加载技能。';
+const EMPTY_MCP = '尚未配置 MCP 服务器。';
 
 function filterByQuery<T extends { name: string; description?: string | null }>(
   items: T[],
@@ -55,6 +62,7 @@ export function SkillsToolsPanel({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [tools, setTools] = useState<ToolsState>({ phase: 'loading', items: [], message: '' });
   const [skills, setSkills] = useState<SkillsState>({ phase: 'loading', items: [], skipped: [], message: '' });
+  const [mcp, setMcp] = useState<McpState>({ phase: 'loading', items: [], message: '' });
   const pendingRef = useRef(false);
 
   /* Esc 关闭（挂在 window 上，输入框聚焦时也生效）。 */
@@ -113,6 +121,26 @@ export function SkillsToolsPanel({ onClose }: { onClose: () => void }) {
       setSkills({ phase: 'unavailable', items: [], skipped: [], message: ERR_BRIDGE });
     }
 
+    if (agent.mcpDescribe) {
+      agent
+        .mcpDescribe()
+        .then(r => {
+          if (cancelled) return;
+          const items = r?.servers ?? [];
+          setMcp(
+            items.length
+              ? { phase: 'ready', items, message: '' }
+              : { phase: 'ready', items: [], message: EMPTY_MCP }
+          );
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMcp({ phase: 'error', items: [], message: ERR_FETCH });
+        });
+    } else {
+      setMcp({ phase: 'unavailable', items: [], message: ERR_BRIDGE });
+    }
+
     return () => {
       cancelled = true;
     };
@@ -160,6 +188,101 @@ export function SkillsToolsPanel({ onClose }: { onClose: () => void }) {
     () => filterByQuery(skills.items, query),
     [skills.items, query]
   );
+  const visibleMcp = useMemo(
+    () => filterByQuery(mcp.items, query),
+    [mcp.items, query]
+  );
+
+  /* MCP 动作统一收口：成功用 describe 载荷整表刷新；失败回滚 + 可读提示。 */
+  const applyMcpResult = useCallback((r: McpDescribePayload | null | undefined) => {
+    const items = r?.servers ?? null;
+    if (items) {
+      setMcp(
+        items.length
+          ? { phase: 'ready', items, message: '' }
+          : { phase: 'ready', items: [], message: EMPTY_MCP }
+      );
+    }
+  }, []);
+
+  const toggleMcpServer = useCallback(
+    (name: string, next: boolean) => {
+      const agent = getAgent();
+      if (!agent || !agent.mcpToggle || pendingRef.current) return;
+      pendingRef.current = true;
+      const prev = mcp;
+      setMcp({
+        phase: 'ready',
+        items: prev.items.map(s => (s.name === name ? { ...s, enabled: next } : s)),
+        message: prev.message,
+      });
+      agent
+        .mcpToggle({ name, enabled: next })
+        .then(r => {
+          // mcp.toggle 返回 mcp.list 载荷（只有活跃 server），整表以 describe 重取
+          agent.mcpDescribe?.().then(applyMcpResult).catch(() => undefined);
+        })
+        .catch(() => {
+          setMcp({ ...prev, message: '状态更新失败，请稍后重试。' });
+        })
+        .finally(() => {
+          pendingRef.current = false;
+        });
+    },
+    [mcp, applyMcpResult]
+  );
+
+  const mcpUpsert = useCallback(
+    (name: string, server: Record<string, unknown>) => {
+      const agent = getAgent();
+      if (!agent || !agent.mcpUpsert || pendingRef.current)
+        return Promise.reject(new Error('不可用'));
+      pendingRef.current = true;
+      return agent
+        .mcpUpsert({ name, server })
+        .then(r => {
+          applyMcpResult(r);
+          return r;
+        })
+        .finally(() => {
+          pendingRef.current = false;
+        });
+    },
+    [applyMcpResult]
+  );
+
+  const mcpRemove = useCallback(
+    (name: string) => {
+      const agent = getAgent();
+      if (!agent || !agent.mcpRemove || pendingRef.current) return;
+      pendingRef.current = true;
+      agent
+        .mcpRemove({ name })
+        .then(applyMcpResult)
+        .catch(() => {
+          setMcp(prev => ({ ...prev, message: '删除失败，请稍后重试。' }));
+        })
+        .finally(() => {
+          pendingRef.current = false;
+        });
+    },
+    [applyMcpResult]
+  );
+
+  const mcpReload = useCallback(() => {
+    const agent = getAgent();
+    if (!agent || !agent.mcpReload || pendingRef.current) return;
+    pendingRef.current = true;
+    agent
+      .mcpReload()
+      .then(applyMcpResult)
+      .catch(() => {
+        setMcp(prev => ({ ...prev, message: '重载失败，请稍后重试。' }));
+      })
+      .finally(() => {
+        pendingRef.current = false;
+      });
+  }, [applyMcpResult]);
 
   return (
     <div
@@ -195,6 +318,14 @@ export function SkillsToolsPanel({ onClose }: { onClose: () => void }) {
               >
                 技能
               </button>
+              <button
+                className={`skills-tools-tabs__btn ${tab === 'mcp' ? 'is-active' : ''}`}
+                role="tab"
+                aria-selected={tab === 'mcp'}
+                onClick={() => setTab('mcp')}
+              >
+                MCP
+              </button>
             </div>
             <button className="skills-tools-panel__close" onClick={onClose} title="关闭">
               <Icon.X size={13} />
@@ -225,12 +356,22 @@ export function SkillsToolsPanel({ onClose }: { onClose: () => void }) {
               message={tools.message}
               onToggle={toggleTool}
             />
-          ) : (
+          ) : tab === 'skills' ? (
             <SkillList
               phase={skills.phase}
               items={visibleSkills}
               skipped={skills.skipped}
               message={skills.message}
+            />
+          ) : (
+            <McpServerList
+              phase={mcp.phase}
+              items={visibleMcp}
+              message={mcp.message}
+              onToggle={toggleMcpServer}
+              onUpsert={mcpUpsert}
+              onRemove={mcpRemove}
+              onReload={mcpReload}
             />
           )}
         </div>
@@ -353,4 +494,271 @@ function SkillList({
 
 function PanelNote({ children }: { children: React.ReactNode }) {
   return <div className="skills-tools-note">{children}</div>;
+}
+
+/* ── MCP 页签 ──────────────────────────────────────────────────── */
+
+function mcpStatusLabel(s: McpServerEntry): string {
+  if (!s.enabled) return '已停用';
+  if (s.dead) return '已失联';
+  if (s.ready) return '运行中';
+  return '待连接';
+}
+
+function McpServerList({
+  phase,
+  items,
+  message,
+  onToggle,
+  onUpsert,
+  onRemove,
+  onReload,
+}: {
+  phase: LoadPhase;
+  items: McpServerEntry[];
+  message: string;
+  onToggle: (name: string, enabled: boolean) => void;
+  onUpsert: (name: string, server: Record<string, unknown>) => Promise<unknown>;
+  onRemove: (name: string) => void;
+  onReload: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  if (phase === 'loading') return <PanelNote>正在加载 MCP 服务器…</PanelNote>;
+  if (phase === 'unavailable' || phase === 'error') return <PanelNote>{message}</PanelNote>;
+
+  return (
+    <>
+      <div className="mcp-toolbar">
+        <button
+          type="button"
+          className="mcp-toolbar__btn"
+          onClick={() => setAdding(a => !a)}
+        >
+          {adding ? '收起表单' : '新增服务器'}
+        </button>
+        <button type="button" className="mcp-toolbar__btn" onClick={onReload}>
+          重新加载
+        </button>
+        {message && <span className="mcp-toolbar__msg">{message}</span>}
+      </div>
+
+      {adding && (
+        <McpAddForm
+          onSubmit={(name, server) =>
+            onUpsert(name, server).then(
+              () => {
+                setAdding(false);
+                setFormError('');
+              },
+              (err: unknown) => {
+                const detail =
+                  (err as { error?: { message?: string } } | null)?.error?.message ?? '';
+                setFormError(detail || '保存失败，请检查字段。');
+              }
+            )
+          }
+          error={formError}
+          onCancel={() => {
+            setAdding(false);
+            setFormError('');
+          }}
+        />
+      )}
+
+      {items.length === 0 ? (
+        <PanelNote>{message || EMPTY_MCP}</PanelNote>
+      ) : (
+        <ul className="skills-tools-list" aria-label="MCP 服务器列表">
+          {items.map(s => {
+            const info = s.serverInfo as { name?: string; version?: string };
+            return (
+              <li key={s.name} className="mcp-server-row">
+                <div className="mcp-server-row__main">
+                  <span className="mcp-server-row__head">
+                    <span className="mcp-server-row__name">{s.name}</span>
+                    <span className={`mcp-server-row__status mcp-server-row__status--${
+                      !s.enabled ? 'off' : s.dead ? 'dead' : s.ready ? 'ready' : 'idle'
+                    }`}>
+                      {mcpStatusLabel(s)}
+                    </span>
+                  </span>
+                  <span className="mcp-server-row__meta">
+                    {s.transport}
+                    {s.transport === 'stdio' && s.command ? ` · ${s.command}` : ''}
+                    {s.transport === 'http' && s.url ? ` · ${s.url}` : ''}
+                    {s.toolCount > 0 ? ` · ${s.toolCount} 个工具` : ''}
+                    {s.restarts > 0 ? ` · 重启 ${s.restarts} 次` : ''}
+                    {info?.name ? ` · ${info.name}${info.version ? ' ' + info.version : ''}` : ''}
+                  </span>
+                </div>
+                <div className="mcp-server-row__actions">
+                  <button
+                    type="button"
+                    className={`switch ${s.enabled ? 'switch--on' : ''}`}
+                    role="switch"
+                    aria-checked={s.enabled}
+                    aria-label={`启用 MCP 服务器 ${s.name}`}
+                    onClick={() => onToggle(s.name, !s.enabled)}
+                  >
+                    <span className="switch__text">{s.enabled ? '已启用' : '已停用'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="mcp-server-row__remove"
+                    title={`删除 ${s.name}`}
+                    onClick={() => onRemove(s.name)}
+                  >
+                    <Icon.X size={12} />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <p className="mcp-footnote">{'密钥不落配置：env / headers 的值请填 ${ENV} 占位符，真实值放 .env。'}</p>
+    </>
+  );
+}
+
+function McpAddForm({
+  onSubmit,
+  onCancel,
+  error,
+}: {
+  onSubmit: (name: string, server: Record<string, unknown>) => Promise<unknown>;
+  onCancel: () => void;
+  error: string;
+}) {
+  const [name, setName] = useState('');
+  const [transport, setTransport] = useState<'stdio' | 'http'>('stdio');
+  const [command, setCommand] = useState('');
+  const [args, setArgs] = useState('');
+  const [envText, setEnvText] = useState('');
+  const [url, setUrl] = useState('');
+  const [headersText, setHeadersText] = useState('');
+
+  const parseKv = (text: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const line of text.split('\n').map((l: string) => l.trim())) {
+      if (!line || line.startsWith('#')) continue;
+      const i = line.indexOf('=');
+      if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+    return out;
+  };
+
+  const submit = () => {
+    if (!name.trim()) {
+      return;
+    }
+    const server: Record<string, unknown> = { transport, enabled: true };
+    if (transport === 'stdio') {
+      server.command = command.trim();
+      const argList = args.trim()
+        ? args.trim().split(/\s+/).filter(Boolean)
+        : [];
+      if (argList.length) server.args = argList;
+      const env = parseKv(envText);
+      if (Object.keys(env).length) server.env = env;
+    } else {
+      server.url = url.trim();
+      const headers = parseKv(headersText);
+      if (Object.keys(headers).length) server.headers = headers;
+    }
+    onSubmit(name.trim(), server);
+  };
+
+  return (
+    <div className="mcp-add-form">
+      <div className="mcp-add-form__title">新增 MCP 服务器</div>
+      <label className="mcp-add-form__row">
+        <span>名称</span>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="如 filesystem"
+        />
+      </label>
+      <div className="mcp-add-form__row">
+        <span>传输</span>
+        <div className="skills-tools-tabs" role="tablist" aria-label="传输类型">
+          <button
+            type="button"
+            className={`skills-tools-tabs__btn ${transport === 'stdio' ? 'is-active' : ''}`}
+            onClick={() => setTransport('stdio')}
+          >
+            stdio
+          </button>
+          <button
+            type="button"
+            className={`skills-tools-tabs__btn ${transport === 'http' ? 'is-active' : ''}`}
+            onClick={() => setTransport('http')}
+          >
+            HTTP
+          </button>
+        </div>
+      </div>
+      {transport === 'stdio' ? (
+        <>
+          <label className="mcp-add-form__row">
+            <span>命令</span>
+            <input
+              value={command}
+              onChange={e => setCommand(e.target.value)}
+              placeholder="如 npx 或 python"
+            />
+          </label>
+          <label className="mcp-add-form__row">
+            <span>参数</span>
+            <input
+              value={args}
+              onChange={e => setArgs(e.target.value)}
+              placeholder="空格分隔，如 -y @modelcontextprotocol/server-filesystem /tmp"
+            />
+          </label>
+          <label className="mcp-add-form__row mcp-add-form__row--top">
+            <span>环境变量</span>
+            <textarea
+              value={envText}
+              onChange={e => setEnvText(e.target.value)}
+              rows={3}
+              placeholder={'每行 KEY=VALUE\n密钥请填 ${ENV_NAME} 占位符，真实值放 .env'}
+            />
+          </label>
+        </>
+      ) : (
+        <>
+          <label className="mcp-add-form__row">
+            <span>URL</span>
+            <input
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="https://example.com/mcp"
+            />
+          </label>
+          <label className="mcp-add-form__row mcp-add-form__row--top">
+            <span>请求头</span>
+            <textarea
+              value={headersText}
+              onChange={e => setHeadersText(e.target.value)}
+              rows={3}
+              placeholder={'每行 Key: Value 或 Key=Value\n凭证请填 ${ENV_NAME} 占位符'}
+            />
+          </label>
+        </>
+      )}
+      {error && <p className="mcp-add-form__error">{error}</p>}
+      <div className="mcp-add-form__actions">
+        <button type="button" className="mcp-add-form__submit" onClick={submit}>
+          保存并连接
+        </button>
+        <button type="button" className="mcp-add-form__cancel" onClick={onCancel}>
+          取消
+        </button>
+      </div>
+    </div>
+  );
 }

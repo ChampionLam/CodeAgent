@@ -88,6 +88,31 @@ const api = {
     return ipcRenderer.invoke("agent:toolToggle", input);
   },
 
+  /** MCP server registry (config + runtime status), for the settings panel. */
+  async mcpDescribe(): Promise<unknown> {
+    return ipcRenderer.invoke("agent:mcpDescribe");
+  },
+
+  /** Add or update one MCP server (stdio: command/args/env; http: url/headers). */
+  async mcpUpsert(input: { name: string; server: Record<string, unknown> }): Promise<unknown> {
+    return ipcRenderer.invoke("agent:mcpUpsert", input);
+  },
+
+  /** Remove one MCP server (stops its process and unregisters its tools). */
+  async mcpRemove(input: { name: string }): Promise<unknown> {
+    return ipcRenderer.invoke("agent:mcpRemove", input);
+  },
+
+  /** Re-sync MCP servers from config (e.g. after editing .env). */
+  async mcpReload(): Promise<unknown> {
+    return ipcRenderer.invoke("agent:mcpReload");
+  },
+
+  /** Enable or disable one MCP server (goes through mcp.toggle). */
+  async mcpToggle(input: { name: string; enabled: boolean }): Promise<unknown> {
+    return ipcRenderer.invoke("agent:mcpToggle", input);
+  },
+
   /** Configured models (no key values, only `hasKey`). */
   async models(): Promise<unknown> {
     return ipcRenderer.invoke("agent:models");
@@ -144,6 +169,25 @@ const api = {
     return ipcRenderer.invoke("agent:pickImages") as Promise<string[]>;
   },
 
+  /** 项目会话的「流程」（一问一答那套，定义在仓里 resources/flows/）。
+   *  问答由 sidecar 写进会话记录；界面只负责把当前这步摆出来。 */
+  flows: {
+    async list(): Promise<{ flows: unknown[] }> {
+      return ipcRenderer.invoke("agent:flowsList") as Promise<{ flows: unknown[] }>;
+    },
+    /** 走一步：stepId 省略 = 从流程开头问第一句。 */
+    async next(payload: {
+      sessionId: string;
+      flowId: string;
+      stepId?: string;
+      answer?: string;
+      answers?: Record<string, string>;
+      force?: boolean;
+    }): Promise<unknown> {
+      return ipcRenderer.invoke("agent:flowsNext", payload);
+    },
+  },
+
   /**
    * Session store, owned by the sidecar (sessions.db). The list survives a
    * restart; message bodies stay server-side and are fetched per session, so
@@ -153,13 +197,30 @@ const api = {
     async list(includeDeleted = false): Promise<{ sessions: unknown[] }> {
       return ipcRenderer.invoke("agent:sessions", { includeDeleted }) as Promise<{ sessions: unknown[] }>;
     },
-    /** Create a session. The caller may pass its own sessionId; the store mints one otherwise. */
-    async create(payload: { sessionId?: string; title?: string; model?: string }):
-      Promise<{ id: string; title: string }> {
+    /** Create a session. The caller may pass its own sessionId; the store mints one otherwise.
+     *  Project sessions (contract v1 §1.1) add kind/projectName/workspaceRoot/projectSkills
+     *  to the same payload — omitted for ordinary chat sessions, wire unchanged. */
+    async create(payload: {
+      sessionId?: string;
+      title?: string;
+      model?: string;
+      kind?: 'chat' | 'project';
+      projectName?: string;
+      workspaceRoot?: string;
+      projectSkills?: string[];
+    }): Promise<{ id: string; title: string }> {
       return ipcRenderer.invoke("agent:sessionCreate", payload) as Promise<{ id: string; title: string }>;
     },
     async rename(sessionId: string, title: string): Promise<unknown> {
       return ipcRenderer.invoke("agent:sessionRename", { sessionId, title });
+    },
+    /** Partial update of a project session's project fields (contract v1 §1.2).
+     *  Only the keys present in `patch` are changed; the response is the full row. */
+    async updateProject(
+      sessionId: string,
+      patch: { projectName?: string; workspaceRoot?: string; projectSkills?: string[] }
+    ): Promise<unknown> {
+      return ipcRenderer.invoke("agent:sessionUpdateProject", { sessionId, ...patch });
     },
     async remove(sessionId: string): Promise<unknown> {
       return ipcRenderer.invoke("agent:sessionDelete", { sessionId });

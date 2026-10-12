@@ -1,6 +1,9 @@
 export type SessionId = string;
 export type Role = 'user' | 'assistant' | 'system';
 
+/** 会话形态（项目会话契约 v1）：缺省/未知值一律当普通会话处理。 */
+export type SessionKind = 'chat' | 'project';
+
 export interface Session {
   id: SessionId;
   title: string;
@@ -10,6 +13,15 @@ export interface Session {
   pinned?: boolean;
   unread?: boolean;
   workspace?: string;
+  /* ── 项目会话字段（sessions.list §1.3；老行没有这些键 → undefined/null/[]）。
+      字段全部可选：普通会话的构造路径一个都不用带，wire 载荷零变化。 ── */
+  /** 'project' 才是项目会话；其余（含 undefined）都按普通会话渲染。 */
+  kind?: SessionKind;
+  projectName?: string | null;
+  /** 项目工作目录（绝对路径）；null = 没挂目录。 */
+  workspaceRoot?: string | null;
+  /** 本会话限定使用的技能名；引擎只把系统提示里的技能列成这些。 */
+  projectSkills?: string[];
 }
 
 export type ToolStatus = 'running' | 'success' | 'failed' | 'rejected' | 'awaiting';
@@ -237,4 +249,26 @@ export interface SkillInfo {
 export interface SkillListPayload {
   skills?: SkillInfo[];
   skipped?: [string, string][];
+}
+
+/* ── MCP server 管理页签（window.agent.mcp* 通道） ────────────── */
+
+/** mcp.describe 返回的单个 server：配置全集 + 运行时状态合并。 */
+export interface McpServerEntry {
+  name: string;
+  transport: 'stdio' | 'http';
+  enabled: boolean;
+  ready: boolean;
+  dead: boolean;
+  restarts: number;
+  serverInfo: Record<string, unknown>;
+  command: string;
+  url: string;
+  toolCount: number;
+}
+
+/** mcp.describe / upsert / remove / reload 的同构载荷。 */
+export interface McpDescribePayload {
+  servers?: McpServerEntry[];
+  skipped?: { name: string; reason: string }[];
 }
