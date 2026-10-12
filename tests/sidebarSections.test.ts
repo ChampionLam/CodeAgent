@@ -61,3 +61,21 @@ test('有 localStorage 时折叠状态写进读出', () => {
     delete (globalThis as Record<string, unknown>).localStorage;
   }
 });
+
+/** 2026-10-12 用户点名：项目分区要在会话分区**上面**。
+ *  渲染顺序写在 JSX 里，node:test 没有 DOM 环境，退而求其次：
+ *  按源码里两个分区 <section> 出现的先后顺序断言（位置对调会红）。 */
+test('Sidebar 渲染顺序：项目分区 <section> 在会话分区 <section> 之前', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const src = await readFile(
+    fileURLToPath(new URL('../ui/src/components/Sidebar.tsx', import.meta.url)),
+    'utf8',
+  );
+  const projectsAt = src.indexOf('aria-label="项目"');
+  const chatsAt = src.indexOf('aria-label="会话"');
+  assert.ok(projectsAt > 0, '找不到项目分区 <section aria-label="项目">');
+  assert.ok(chatsAt > projectsAt, '会话分区必须排在项目分区之后（项目在上、会话在下）');
+  // 空态判定与两个分区条件渲染共用，位置不受影响；折叠持久化语义不随位置变。
+  assert.ok(src.includes("localStorage") || src.includes('readSidebarSections'));
+});

@@ -187,6 +187,14 @@
   margin-top: 2px;
   margin-bottom: 1px;
 }
+/* 2026-10-12 项目分区挪到会话分区上面后，两区之间要一眼分清：
+   仅当下面真的还有会话分区时，项目区收尾留更大的呼吸间距 + 一条克制的分隔线
+   （:has 取代「永远画线」——只有项目、没有会话时不留悬空分隔线）。 */
+.sidebar__section--projects { margin-bottom: 10px; }
+.sidebar__section--projects:has(+ .sidebar__section) {
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
+}
 .sidebar__more:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* Session row */
