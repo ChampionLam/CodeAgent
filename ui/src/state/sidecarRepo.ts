@@ -27,6 +27,12 @@ interface SessionRow {
   updatedAt?: number | string;
   model?: string;
   messageCount?: number;
+  /* ── Project-session fields (contract v1 §1.3). Old rows lack the keys
+      entirely → undefined/null, which maps to "ordinary chat session". ── */
+  kind?: string;
+  projectName?: string | null;
+  workspaceRoot?: string | null;
+  projectSkills?: string[] | null;
 }
 
 interface MessageRow {
@@ -43,9 +49,23 @@ interface MessageRow {
 interface SessionsBridge {
   sessions: {
     list(includeDeleted?: boolean): Promise<{ sessions: SessionRow[] }>;
-    create(p: { sessionId?: string; title?: string; model?: string }):
-      Promise<{ id: string; title: string }>;
+    create(p: {
+      sessionId?: string;
+      title?: string;
+      model?: string;
+      /* Project sessions (contract v1 §1.1); optional → ordinary chat session. */
+      kind?: 'chat' | 'project';
+      projectName?: string;
+      workspaceRoot?: string;
+      projectSkills?: string[];
+    }): Promise<{ id: string; title: string }>;
     rename(sessionId: string, title: string): Promise<unknown>;
+    /** Partial update of a project session's project fields (contract v1 §1.2). */
+    updateProject?(sessionId: string, patch: {
+      projectName?: string;
+      workspaceRoot?: string;
+      projectSkills?: string[];
+    }): Promise<unknown>;
     remove(sessionId: string): Promise<unknown>;
     messages(sessionId: string, includeInactive?: boolean): Promise<{ messages: MessageRow[] }>;
     search(query: string, sessionId?: string): Promise<{ hits: Array<MessageRow & { sessionId?: string }> }>;
@@ -193,6 +213,12 @@ export class SidecarConversationRepo implements ConversationRepo {
         updatedAt: toMs(row.updatedAt, now),
         modelId: row.model || '',
         pinned: this.pinned.has(row.id),
+        // Project-session fields (contract v1 §1.3). Ordinary rows stay
+        // chat-shaped: kind omitted/null → undefined, skills → [].
+        ...(row.kind === 'project' ? { kind: 'project' as const } : {}),
+        ...(row.kind === 'project' ? { projectName: row.projectName ?? null } : {}),
+        ...(row.kind === 'project' ? { workspaceRoot: row.workspaceRoot ?? null } : {}),
+        ...(row.kind === 'project' ? { projectSkills: row.projectSkills ?? [] } : {}),
         // Bodies are fetched per session (loadMessages); the sidebar shows
         // previews from the rows it has rather than holding every transcript.
         messages: []
@@ -246,7 +272,15 @@ export class SidecarConversationRepo implements ConversationRepo {
       await this.bridge.create({
         sessionId: c.id,
         title,
-        ...(c.modelId ? { model: c.modelId } : {})
+        ...(c.modelId ? { model: c.modelId } : {}),
+        // Project sessions carry their fields on create (contract v1 §1.1);
+        // ordinary chats omit every key → wire payload byte-identical to before.
+        ...(c.kind === 'project' ? {
+          kind: 'project' as const,
+          ...(c.projectName ? { projectName: c.projectName } : {}),
+          ...(c.workspaceRoot ? { workspaceRoot: c.workspaceRoot } : {}),
+          ...(c.projectSkills && c.projectSkills.length ? { projectSkills: c.projectSkills } : {})
+        } : {})
       });
       this.known.add(c.id);
       this.sentTitle.set(c.id, title);
@@ -257,6 +291,38 @@ export class SidecarConversationRepo implements ConversationRepo {
     if (this.sentTitle.get(c.id) === title) return;
     await this.bridge.rename(c.id, title);
     this.sentTitle.set(c.id, title);
+  }
+
+  /**
+   * Partial update of a project session's project fields (contract v1 §1.2):
+   * only the keys present in `patch` are sent. Returns the bridge's full row
+   * (or null when the bridge/preload doesn't offer the method yet).
+   */
+  async updateProject(
+    id: string,
+    patch: { projectName?: string; workspaceRoot?: string; projectSkills?: string[] }
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.bridge.updateProject) return null;
+    const sent: { projectName?: string; workspaceRoot?: string; projectSkills?: string[] } = {};
+    if (patch.projectName !== undefined) sent.projectName = patch.projectName;
+    if (patch.workspaceRoot !== undefined) sent.workspaceRoot = patch.workspaceRoot;
+    if (patch.projectSkills !== undefined) sent.projectSkills = patch.projectSkills;
+    const res = await this.bridge.updateProject(id, sent) as Record<string, unknown> | null;
+    return res ?? null;
+  }
+
+  /** Title-only push (bridge rename); keeps our bookkeeping in step. */
+  async rename(id: string, title: string): Promise<void> {
+    await this.bridge.rename(id, title);
+    this.known.add(id);
+    this.sentTitle.set(id, title);
+  }
+
+  /** 引擎侧标题回执（t_37f5d060 chat.title 事件）：只同步本地记账，
+   *  不回写服务器——写已经发生，再 rename 一次是空转。 */
+  noteServerTitle(id: string, title: string): void {
+    this.known.add(id);
+    this.sentTitle.set(id, title);
   }
 
   async deleteConversation(id: string): Promise<void> {

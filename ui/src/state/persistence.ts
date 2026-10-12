@@ -34,6 +34,12 @@ export interface PersistedConversation {
   pinned?: boolean;
   unread?: boolean;
   workspace?: string;
+  /* ── Project-session fields (contract v1). All optional: ordinary chat
+      sessions carry none of them, so their persisted shape is unchanged. ── */
+  kind?: 'chat' | 'project';
+  projectName?: string | null;
+  workspaceRoot?: string | null;
+  projectSkills?: string[];
   /** Messages belonging to this conversation. Held in full so the sidebar
      *  can search message bodies without an extra round-trip. */
   messages: Message[];
@@ -69,6 +75,33 @@ export interface ConversationRepo {
 
   /** Drop a conversation. No-op if it doesn't exist. */
   deleteConversation(id: string): Promise<void>;
+
+  /**
+   * Push just the title. Used when a project name becomes the session title and
+   * when the user edits a title by hand: the sidecar RPC writes the title
+   * column right away, instead of waiting for the next debounced save to
+   * notice the title moved (that wait is what lost renames on restart).
+   * Optional: the local store renames through saveConversation.
+   */
+  rename?(id: string, title: string): Promise<void>;
+
+  /**
+   * 引擎侧已把会话标题写进 sessions.db 并推来 chat.title 事件
+   * （t_37f5d060）。repo 只记下「服务器当前标题」，让随后的
+   * debounced saveConversation 不再把这个标题 rename 回截断旧值。
+   * 注意区分 rename?()：那是本地发起的写；这个是远端写完的回执。
+   */
+  noteServerTitle?(id: string, title: string): void;
+
+  /**
+   * Project sessions (contract v1 §1.2): partial update of the project fields.
+   * Optional because only the sidecar backend has an RPC for it; others
+   * return null and the caller falls back to optimistic local state.
+   */
+  updateProject?(
+    id: string,
+    patch: { projectName?: string; workspaceRoot?: string; projectSkills?: string[] }
+  ): Promise<Record<string, unknown> | null>;
 
   /** Bulk replace — used when the seed runs on first launch. */
   bulkSeed(rows: PersistedConversation[]): Promise<void>;
@@ -330,6 +363,11 @@ export function toPersisted(s: Session, messages: Message[]): PersistedConversat
     pinned: s.pinned,
     unread: s.unread,
     workspace: s.workspace,
+    // Project-session fields ride along; ordinary sessions omit them all.
+    ...(s.kind === 'project' ? { kind: 'project' as const } : {}),
+    ...(s.kind === 'project' ? { projectName: s.projectName ?? null } : {}),
+    ...(s.kind === 'project' ? { workspaceRoot: s.workspaceRoot ?? null } : {}),
+    ...(s.kind === 'project' ? { projectSkills: s.projectSkills ?? [] } : {}),
     messages
   };
 }

@@ -340,5 +340,177 @@ def merge_tool_event(state: dict, event: str, data: dict) -> None:
                 row[key] = data[key]
 
 
+def generate_session_title(store, session_id: str | None, *, messages: list,
+                           loop_messages: list | None = None,
+                           request_messages: list | None = None,
+                           cfg=None, warn=_default_warn) -> str | None:
+    """首轮对话结束后生成短标题（t_37f5d060）。返回新标题或 None。
+
+    何时跳过（返回 None，绝不报错给调用方）：
+      * 没有会话 / 没有有效用户消息 —— 空会话不生成；
+      * store 报告标题已锁定（title_source 是 user/project）—— 用户改过；
+      * store 里 title_source 已经是 'auto' —— 这个会话生成过一次了。
+
+    成功路径：
+      * 有 cfg（配置了模型）→ 一次非流式小请求生成中文 ≤14 字标题；
+      * 无 cfg / 调用出错 / 返回不合规 → 回退现有逻辑（首问截断，30 字）。
+
+    解析容错：模型偶尔包引号/句号/前后缀说明，统一剥掉；剥完仍空或超长
+    截到 14 字。写入用 store.set_generated_title（同事务里完成
+    「锁定检查 + 写入 + 落 'auto' 标记」，无竞态）。本函数自己吞掉所有
+    异常——标题生成失败绝不能影响会话落库或对话本身。
+    """
+    try:
+        if store is None or not session_id:
+            return None
+        if not getattr(store, "set_generated_title", None):
+            return None                       # 老版本 store：不动标题
+        row = store.get_session(session_id)
+        if row is None:
+            return None
+        src = row.get("title_source")
+        if src in (sessionstore_TITLE_USER, sessionstore_TITLE_PROJECT):
+            return None                       # 用户改过：不许覆盖
+        if src == sessionstore_TITLE_AUTO:
+            return None                       # 生成过一次了
+        history = _first_turn_pair(messages, loop_messages, request_messages)
+        if history is None:
+            return None                       # 没有有效用户消息：不生成
+        title = None
+        if cfg is not None:
+            raw = _title_from_model(cfg, history, warn)
+            if raw:
+                title = _clean_title(raw)      # ≤14 字、剥引号句号
+        if not title:
+            # 回退：现有逻辑原样（首个提问截断 30 字），不做 14 字清洗——
+            # 「回退到现有逻辑」就是字节口径都不变的兜底。
+            title = _fallback_title_from_history(history)
+            if not title:
+                return None
+        if not store.set_generated_title(session_id, title):
+            return None                       # 锁定检查在写入事务里再兜一道
+        return title
+    except Exception as e:                    # noqa: BLE001
+        warn("WARN", "session title generate failed: %r" % (e,))
+        return None
+
+
+TITLE_PROMPT = (
+    "根据下面这轮对话，用一个简短标题概括这次在做什么。要求：\n"
+    "1. 只输出标题本身，不要引号、不要句号、不要任何前缀或解释。\n"
+    "2. 中文，不超过 14 个字。\n"
+    "3. 概括用户的意图或任务，不要复述提问原文。\n\n"
+    "对话：\n"
+)
+
+
+def _first_turn_pair(messages, loop_messages, request_messages) -> tuple[str, str] | None:
+    """(首个用户提问, 本轮助手首答文本)；没有有效用户消息时 None。
+
+    助手答案允许为空串（模型只回了空文本也算首轮完成），用户提问必须有。
+    """
+    for msg in messages or []:
+        if (msg or {}).get("role") != "user":
+            continue
+        text = _extract_text(msg.get("content")).strip()
+        if text:
+            answer = _last_assistant_text(loop_messages, request_messages)
+            return text, answer
+        break
+    return None
+
+
+def _last_assistant_text(loop_messages, request_messages) -> str:
+    """本轮助手回复的正文（优先 loop 尾部，兜底 request 尾部）。"""
+    for source in (loop_messages, request_messages):
+        for msg in reversed(list(source or [])):
+            if (msg or {}).get("role") != "assistant":
+                continue
+            text = _extract_text(msg.get("content")).strip()
+            if text:
+                return text
+    return ""
+
+
+def _title_from_model(cfg, history: tuple[str, str], warn) -> str | None:
+    """一次小请求生成标题。非流式语义：chat_messages_once 聚完 delta。"""
+    import llm
+    question, answer = history
+    prompt = TITLE_PROMPT + "用户：" + question[:2000]
+    if answer:
+        prompt += "\n助手：" + answer[:2000]
+    try:
+        raw = llm.chat_messages_once(cfg, [{"role": "user", "content": prompt}],
+                                     max_tokens=64)
+        return raw.strip() if isinstance(raw, str) else None
+    except Exception as e:                    # noqa: BLE001
+        warn("INFO", "title model call failed, fallback: %r" % (e,))
+        return None
+
+
+def _fallback_title_from_history(history: tuple[str, str]) -> str | None:
+    """回退口径 = 现有逻辑：第一个用户消息文本截 30 字（title_from_messages）。"""
+    try:
+        import sessionstore as _ss
+        return _ss.title_from_messages([{"role": "user", "content": history[0]}])
+    except Exception:
+        text = history[0]
+        return text[:TITLE_MAX_CHARS_FALLBACK] if text else None
+
+
+TITLE_MAX_CHARS_FALLBACK = 30
+TITLE_MAX_GENERATED = 14
+
+#: 供 generate_session_title 里引用（避免顶层 import 造成循环依赖时炸掉；
+#: 实际 python/ 下无循环，正常 import）。
+try:
+    from sessionstore import (  # noqa: E402
+        TITLE_SOURCE_AUTO as sessionstore_TITLE_AUTO,
+        TITLE_SOURCE_USER as sessionstore_TITLE_USER,
+        TITLE_SOURCE_PROJECT as sessionstore_TITLE_PROJECT,
+    )
+except Exception:                            # pragma: no cover
+    sessionstore_TITLE_AUTO = "auto"
+    sessionstore_TITLE_USER = "user"
+    sessionstore_TITLE_PROJECT = "project"
+
+
+def _clean_title(raw: str) -> str:
+    """模型输出的兜底清洗：剥 markdown 标记/引号/句读、折叠空白、截 14 字。
+
+    生成路径和回退路径都过这里——回退截断 30 字的旧标题也要保证 ≤14，
+    侧栏宽度按新口径统一。空串返回 ""，调用方判空放弃。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = text.strip("`")
+    # 只剥最外层成对的引号
+    pairs = [("“", "”"), ("「", "」"), ("『", "』"), ('"', '"'), ("'", "'")]
+    changed = True
+    while changed and len(text) >= 2:
+        changed = False
+        for left, right in pairs:
+            if text.startswith(left) and text.endswith(right):
+                text = text[1:-1].strip()
+                changed = True
+                break
+    # markdown 标题/列表标记
+    if text.lstrip().startswith("#"):
+        text = text.lstrip().lstrip("#").strip()
+    if text.startswith("-") or text.startswith("*"):
+        text = text.lstrip("-*").strip()
+    text = text.rstrip("。.！!？?；;，,、")
+    # 句中残留的引号也去掉（「标题：xxx」这类）
+    text = text.replace("“", "").replace("”", "") \
+               .replace("「", "").replace("」", "") \
+               .replace("『", "").replace("』", "")
+    text = " ".join(text.split())
+    if not text:
+        return ""
+    return text[:TITLE_MAX_GENERATED]
+
+
 __all__ = ["open_chat_session", "persist_new_user_messages",
-           "persist_chat_result", "merge_tool_event"]
+           "persist_chat_result", "merge_tool_event",
+           "generate_session_title"]

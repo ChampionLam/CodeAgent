@@ -40,13 +40,13 @@ class StoreCase(unittest.TestCase):
 
 class MigrationTest(StoreCase):
     def test_schema_version_and_rerun_is_a_noop(self) -> None:
-        # 007_project_sessions.sql 之后是 7（sessions 的项目会话字段）。
+        # 008_title_source.sql 之后是 8（标题来源标记，t_37f5d060）。
         # 版本号变化必须是有意的迁移，所以这里写死数字而不是取最大值。
-        self.assertEqual(self.store.schema_version(), 7)
+        self.assertEqual(self.store.schema_version(), 8)
         # Reopening the same file must apply nothing and keep the same version.
         again = sessionstore.SessionStore(self.path)
         try:
-            self.assertEqual(again.schema_version(), 7)
+            self.assertEqual(again.schema_version(), 8)
             self.assertEqual(again.list_sessions(), [])
         finally:
             again.close()

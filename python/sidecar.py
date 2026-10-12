@@ -1365,7 +1365,9 @@ def _handle_sessions_rpc(req_id, method: str, params: dict) -> dict:
                 return _make_error_response(req_id, "BAD_REQUEST",
                                             "params.title must be a non-empty string")
             try:
-                store.rename_session(sid, title)
+                # 'user'：界面 sessions.rename 是用户改标题的入口（t_37f5d060
+                # 008 契约）。带上来源标记，引擎侧的自动生成从此不再覆盖它。
+                store.rename_session(sid, title, source="user")
             except LookupError:
                 return _make_error_response(req_id, "SESSION_NOT_FOUND",
                                             f"no such session: {sid}")
@@ -2750,6 +2752,39 @@ def _make_delegator(*, cfg, cancel, session_id, window):
     return delegator
 
 
+def _spawn_title_generation(*, req_id: str, session_id: str | None,
+                            request_messages: list, loop_messages: list,
+                            cfg) -> None:
+    """后台线程跑标题生成（t_37f5d060）。永抛异常，失败只记日志。
+
+    时机：persist_chat_result 落库完成之后（对话产出不受阻塞）。生成成功
+    推一个 chat.title 事件（带 chatId + sessionId + 新标题），界面据此更新
+    侧栏标题而不需要新接口。generate_session_title 内部自带「只生成一次 /
+    用户改过不覆盖 / 空会话跳过 / 失败回退」全部边界。
+    """
+    if not session_id:
+        return
+
+    def _worker() -> None:
+        try:
+            title = chat_persist.generate_session_title(
+                _session_store(), session_id,
+                messages=request_messages,
+                loop_messages=loop_messages,
+                request_messages=request_messages,
+                cfg=cfg, warn=lambda level, msg: log(level, "chat title: %s" % msg))
+            if title:
+                _emit("chat.title", {"id": req_id, "sessionId": session_id,
+                                     "title": title})
+        except Exception as e:               # noqa: BLE001
+            log("WARN", "title generation thread failed: %r" % (e,))
+
+    try:
+        threading.Thread(target=_worker, name="title-gen", daemon=True).start()
+    except Exception as e:                   # noqa: BLE001
+        log("WARN", "title generation spawn failed: %r" % (e,))
+
+
 def _run_chat(req_id, params) -> None:
     """Worker thread: run the agent loop, emitting chat.* / tool.* / approval.* events.
 
@@ -3018,6 +3053,12 @@ def _run_chat(req_id, params) -> None:
             reasoning="".join(reason_parts),
             model=model_name_for_chat(resolved_cfg),
             base_url=base_url_for_chat(resolved_cfg), warn=_persist_warn)
+        # 首轮结束后生成短标题（t_37f5d060）：落库已先完成，生成放后台线程，
+        # 绝不阻塞对话产出；产出后单独推一次 chat.title 事件给界面。
+        _spawn_title_generation(req_id=req_id, session_id=session_id,
+                                request_messages=messages,
+                                loop_messages=list(ctx.messages),
+                                cfg=resolved_cfg)
         if turn_artifacts:
             # 落库之后单独推一次：done 事件发出时附件还没算出来，
             # 流式那一轮靠这个事件就能立刻看到文件卡（2026-09-27）。

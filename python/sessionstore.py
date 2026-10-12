@@ -36,6 +36,13 @@ MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migra
 
 TITLE_MAX_CHARS = 30
 
+# 008 标题来源标记（t_37f5d060）：title_source 的合法取值。NULL/老行按
+# 'auto' 语义处理（引擎还能写）；'user'/'project' 一旦出现，引擎侧的
+# 自动生成与覆盖一律跳过。
+TITLE_SOURCE_AUTO = "auto"
+TITLE_SOURCE_USER = "user"
+TITLE_SOURCE_PROJECT = "project"
+
 STATUS_ACTIVE = "active"
 STATUS_DELETED = "deleted"
 
@@ -401,19 +408,66 @@ class SessionStore:
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def rename_session(self, session_id: str, title: str) -> None:
+    def rename_session(self, session_id: str, title: str,
+                       source: str | None = None) -> None:
+        """改标题。source: 'user'（界面 sessions.rename，用户意图，引擎之后
+        不得再覆盖）/ 'project'（项目名推成标题，同用户意图）/ None = 保持
+        原 title_source 不动（兼容老调用方）。"""
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                cur = self._conn.execute(
-                    "UPDATE sessions SET title=?, updated_at=datetime('now')"
-                    " WHERE id=?", (title, session_id))
+                if source is None:
+                    cur = self._conn.execute(
+                        "UPDATE sessions SET title=?, updated_at=datetime('now')"
+                        " WHERE id=?", (title, session_id))
+                else:
+                    cur = self._conn.execute(
+                        "UPDATE sessions SET title=?, title_source=?,"
+                        " updated_at=datetime('now') WHERE id=?",
+                        (title, source, session_id))
                 if cur.rowcount != 1:
                     raise LookupError("no such session: %s" % session_id)
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def set_generated_title(self, session_id: str, title: str) -> bool:
+        """引擎侧写标题（模型生成 / 兜底截断，t_37f5d060）。
+
+        只在 title_source 不是 user/project（即 NULL/auto/老行）时写入，
+        写入同时把 title_source 落成 'auto'——这就是「一个会话只自动生成
+        一次」的判定位：下次生成器看到 'auto' 直接跳过。用户改过标题的
+        会话在这里返回 False，一字不动。找不到会话也返回 False。
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self._conn.execute(
+                    "UPDATE sessions SET title=?, title_source=?,"
+                    " updated_at=datetime('now') WHERE id=?"
+                    " AND title_source IS NULL",
+                    (title, TITLE_SOURCE_AUTO, session_id))
+                if cur.rowcount != 1:
+                    self._conn.execute("ROLLBACK")
+                    return False
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+            return True
+
+    def session_title_is_locked(self, session_id: str) -> bool:
+        """True = 标题已被用户（或项目名）改过，引擎不许动。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT title_source FROM sessions WHERE id=?",
+                (session_id,)).fetchone()
+        if row is None:
+            return True   # 未知会话：当作锁定，宁可不改也不错改
+        src = row[0]
+        return src in (TITLE_SOURCE_USER, TITLE_SOURCE_PROJECT)
+
 
     def delete_session(self, session_id: str) -> None:
         """Soft delete: status='deleted'. Rows are never physically removed."""

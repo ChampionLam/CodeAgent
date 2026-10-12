@@ -29,6 +29,13 @@ import { hasSidecarStore } from './sidecarRepo';
 
 export type View = 'chat' | 'usage' | 'settings';
 
+/**
+ * 新建项目会话的**占位标题**。对话式入口没有「项目名」输入框，标题先顶上这个，
+ * 等流程问到项目名称（接入那条问出目录）再改写（2026-10-09 用户口径：
+ * 新建项目走对话，不弹表单）。
+ */
+export const NEW_PROJECT_TITLE = '新项目';
+
 /* ── 思考显示偏好（纯界面偏好，存 localStorage）───────────────────────────
  * 用户要求：思考不是「不展示」，而是由用户控制。这里存的就是这个选择：
  *   折叠（默认）/ 展开 / 隐藏（生成中仍显示一行「思考中」指示，否则模型
@@ -55,6 +62,33 @@ const TURN_OVERRIDES_KEY = 'desk-turn-overrides';
     按模型分开存（用户口径 2026-09-26：非当前模型也能在模型面板里设思考/上下文，
     只有点列表里的模型名字才是切换模型）。 */
 export type TurnOverridesBySession = Record<string, Record<string, TurnOverrides>>;
+
+/**
+ * 项目会话的「流程」状态（一问一答那套，定义在仓里 resources/flows/）。
+ *
+ * 问答本身**落进会话记录**（sidecar 负责写），这里只放在"正等着哪一步、已经
+ * 收下了什么"这一点点内存状态：既有值就意味着输入框要把话交给流程判断。
+ * 用户不按剧本走时流程当场收尾（kind=off_script），界面把他那句话按普通消息
+ * 发出去 —— 别把人卡在流程里（2026-10-09 用户口径）。
+ */
+export interface FlowWaiting {
+  flowId: string;
+  step: {
+    id: string;
+    say: string;
+    end?: boolean;
+    options?: { label: string; value: string }[];
+    input?: { placeholder?: string; optional?: boolean };
+  };
+  answers: Record<string, string>;
+  /** 上一步没答对时的说明（kind=retry 才有）。 */
+  warn?: string;
+  /** kind=retry 给的两个出口：重新说（redo）/ 就按这个来（force）。 */
+  retryOptions?: { label: string; role?: string }[];
+  /** kind=retry 时**被拒的那句原话**（「照样继续」要拿它再提交一次，不重打）。 */
+  retryAnswer?: string;
+  waiting: boolean;
+}
 
 /**
  * 会话级覆盖存本地：只影响请求参数，不碰模型配置/凭证。
@@ -151,6 +185,12 @@ interface State {
   lastPromptTokens: number | null;
   /** Reasoning channel display mode — user-controlled (not hidden away). */
   thinkingDisplay: ThinkingDisplay;
+  /** 开场引导卡 → 输入框（契约 v1 §3.2.5）：项目会话空消息时，快捷按钮把
+   *  预置提示词放进 composer 草稿。纯 UI 状态，不发送、不落库、零 token。 */
+  composerDraft: string;
+  /** 项目会话的「流程」状态（一问一答那套）：key = sessionId。有值 = 正等着
+   *  用户回答这一步 —— 输入框会把话交给流程判断，而不是直接发给模型。 */
+  flowsWaiting: Record<string, FlowWaiting | undefined>;
   /** Whole-application appearance/preference set (theme, accent, fonts, send key).
    *  Per-machine UI preference: localStorage only, never config.json, never the sidecar. */
   appSettings: AppSettings;
@@ -167,6 +207,29 @@ interface Actions {
   setView(v: View): void;
   selectSession(id: string): void;
   createSession(): void;
+  /** 新建项目会话（契约 v1）：走 sessions.create({kind:'project', …})，
+   *  建好即选中，可直接对话。目录可留空（引擎回落到配置的 workspaceRoot）。 */
+  createProjectSession(input: {
+    projectName: string;
+    workspaceRoot?: string;
+    projectSkills?: string[];
+  }): void;
+  /** 项目会话元信息局部更新（契约 v1 §1.2）：只传要改的键。 */
+  updateProject(
+    sessionId: string,
+    patch: { projectName?: string; workspaceRoot?: string; projectSkills?: string[] }
+  ): Promise<void>;
+  /** 项目会话开场流程：问第一句（问答由 sidecar 落进会话记录）。 */
+  startProjectFlow(sessionId: string, flowId?: string): void;
+  /** 回答流程当前这一步。返回值里 kind='off_script' 表示用户没按剧本走 ——
+   *  调用方（输入框）应当把这句话按普通消息发给模型，不要卡住用户。 */
+  answerFlow(
+    sessionId: string,
+    answer: string,
+    opts?: { force?: boolean }
+  ): Promise<{ kind?: string } | null>;
+  /** 不再等流程回答（用户直接发了消息时调用）。 */
+  dismissFlow(sessionId: string): void;
   toggleSidebar(): void;
   setActiveModel(id: string): void;
   /** 会话内审批卡：允许（remember=true 时走「总是允许」口径）。 */
@@ -202,6 +265,9 @@ interface Actions {
   setThinkingDisplay(v: ThinkingDisplay): void;
   /** 输入区控制条：改本会话当前模型的思考 / 深度 / 上下文（undefined = 跟随模型设置）。 */
   setTurnOverride(patch: TurnOverrides): void;
+  /** 开场引导卡（契约 v1 §3.2.5）把提示词填进输入框：只改输入框内容，
+   *  不发送、不落库、不调模型。 */
+  setComposerDraft(text: string): void;
   /** 同上，但指定模型（模型面板悬停到哪个模型就改哪个）。 */
   setModelOverride(modelId: string, patch: TurnOverrides): void;
   /** 整机界面偏好：合并写入 + 立即应用到 :root + 落 localStorage。 */
@@ -232,6 +298,16 @@ function deriveTitle(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   if (!flat) return '新会话';
   return flat.length > 20 ? flat.slice(0, 20) + '…' : flat;
+}
+
+/** 项目名称统一收拾一下（流程问出来的、模型问出来的都走这里）：折叠空白、
+ *  去掉包着的引号、去尾部句读；太长截断——标题栏放不下 30 个字。
+ *  空串原样返回，调用方自己决定要不要用。 */
+function tidyProjectName(raw: string): string {
+  const flat = (raw || '').replace(/\s+/g, ' ').trim()
+    .replace(/^[\u300c\u201c"\u300e']|[\u300d\u201d"\u300f']$/g, '')
+    .replace(/[\u3002.\uff01!\uff1b;\uff0c,]+$/, '');
+  return flat.length > 24 ? flat.slice(0, 24) + '\u2026' : flat;
 }
 
 /** Stable sort: pinned first, then by updatedAt desc. */
@@ -342,6 +418,26 @@ const TOOL_LABELS: Record<string, string> = {
   list_skills: '列出技能'
 };
 
+/**
+ * t_87ce5f71：审批 reason 的面向用户兜底归一。
+ * 引擎侧已产人话文案；万一旧 sidecar / 旧事件还带内部术语
+ * （弹卡/校准/p=0.974/≥0.85/高置信/模型很确定），这里按特征
+ * 折成统一人话，保证卡片上永远不出现术语。数值细节留在
+ * payload / 内部日志，不放正文。
+ */
+function sanitizeApprovalReason(raw: string): string {
+  const s = raw.trim();
+  if (!s) return s;
+  if (/弹卡|校准|高置信|很确定|不确定带/.test(s)
+      || /概率\s*p\s*=/.test(s)
+      || /p\s*=\s*0\.\d+\s*(≥|>=|<)/.test(s)) {
+    return /高置信/.test(s) || /(≥|>=)\s*0\.85/.test(s)
+      ? '检测到可疑命令执行（危险等级：高）。这条命令可能改动系统文件或从网络下载内容，确认后才会执行'
+      : '检测到可疑命令执行（危险等级：中）。无法完全排除风险，确认后才会执行';
+  }
+  return s;
+}
+
 /** 把某条审批就地标成已决：卡片从按钮变结果行（值用界面口径 allowed/denied）。 */
 function decideApprovalInMessages(
   prev: Record<string, Message[]>, sid: string, approvalId: string,
@@ -357,6 +453,20 @@ function decideApprovalInMessages(
         : m
     )
   };
+}
+
+/**
+ * 发送失败时**给人看的话**：常见的几种别把原始报错糊到用户脸上。
+ * 认不出来就原样透出 —— 不编解释（免得把人带偏）。
+ */
+function humanizeSendError(msg: string): string {
+  if (/no such model id/i.test(msg)) return '这个模型没了，可能被删过。换一个再发，或者在设置里重新加一个。';
+  if (/MODEL_KEY_MISSING|missing api key|no api key/i.test(msg)) return '这个模型还没填 Key，设置里补上就能用。';
+  if (/401|unauthori[sz]ed|invalid api key/i.test(msg)) return '密钥不对，模型那边拒了（401）。设置里看一眼 Key。';
+  if (/404|not found/i.test(msg)) return '模型那边说找不到（404），多半是下架了，换一个。';
+  if (/timeout|timed out|超时/i.test(msg)) return '等太久了，超时了。再发一次，或者换个快点的模型。';
+  if (/ENOTFOUND|ECONNREFUSED|getaddrinfo|network|fetch failed/i.test(msg)) return '连不上模型那边，看着像网络问题。检查下网络或者代理。';
+  return msg;
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -549,9 +659,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Reasoning display choice (user-controlled, survives reload).
   const [thinkingDisplay, setThinkingDisplayState] =
     useState<ThinkingDisplay>(readThinkingDisplay);
+  // 开场引导卡（契约 v1 §3.2.5）→ composer 草稿。只在项目会话空态被点快捷
+  // 按钮时写入；Composer 挂载时取它当初始值，之后归零，普通会话永远看不见。
+  const [composerDraft, setComposerDraftState] = useState<string>('');
+  // 项目会话的流程状态：key = sessionId（见 FlowWaiting 的注释）。
+  const [flowsWaiting, setFlowsWaiting] = useState<Record<string, FlowWaiting | undefined>>({});
+  // 正在等 sidecar 回话的会话（防连点：一次只允许一个答案在飞）。
+  const flowBusyRef = useRef<Record<string, boolean>>({});
+  const flowsWaitingRef = useRef<Record<string, FlowWaiting | undefined>>({});
+  useEffect(() => { flowsWaitingRef.current = flowsWaiting; }, [flowsWaiting]);
   const setThinkingDisplay = useCallback((v: ThinkingDisplay) => {
     setThinkingDisplayState(v);
     writeThinkingDisplay(v);
+  }, []);
+
+  /** 引导卡快捷按钮 → 输入框。填完即清：一次性搬运，避免切会话时串味。 */
+  const setComposerDraft = useCallback((text: string) => {
+    setComposerDraftState(text ?? '');
   }, []);
 
   /* Whole-application appearance settings. Applied to documentElement so every
@@ -699,7 +823,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
               modelId: rest.modelId,
               pinned: rest.pinned,
               unread: rest.unread,
-              workspace: rest.workspace
+              workspace: rest.workspace,
+              // Project-session fields (contract v1): sidecar rows carry them,
+              // IndexedDB rows may; ordinary sessions stay keyless here.
+              ...(rest.kind === 'project' ? { kind: 'project' as const } : {}),
+              ...(rest.kind === 'project' ? { projectName: rest.projectName ?? null } : {}),
+              ...(rest.kind === 'project' ? { workspaceRoot: rest.workspaceRoot ?? null } : {}),
+              ...(rest.kind === 'project' ? { projectSkills: rest.projectSkills ?? [] } : {})
             });
             nextMessages[row.id] = msgs ?? [];
           }
@@ -931,15 +1061,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // 会话内审批（设计 §3）：不再驱动全局弹窗，折成当前助手回合
           // Message.approvals 里的一条，由 ApprovalCard 渲染。level
           // 照后端事件读进来（不报错），界面不显示。
+          // t_87ce5f71：卡片标题用用户能懂的话，不用内部术语。
           const req: ApprovalRequest = {
             id: String(data.approvalId),
             tool: String(data.name),
             level: String(data.level ?? 'L1') as ApprovalRequest['level'],
-            title: '需要确认',
+            title: '安全命令管控',
             toolLabel: TOOL_LABELS[data.name as string] ?? '执行命令',
             detailHint: '展开详情',
             payload: formatArguments(data.arguments),
-            reason: String(data.reason ?? ''),
+            reason: sanitizeApprovalReason(String(data.reason ?? '')),
             canAlwaysAllow: data.canAlwaysAllow === true,
             decision: null,
             createdAt: Date.now()
@@ -1001,6 +1132,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
             receivedAt: Date.now()
           };
           setCompactionNotices(prev => ({ ...prev, [sid]: notice }));
+          break;
+        }
+        case 'chat.title': {
+          // 引擎生成的短标题（t_37f5d060）：后台落库成功后推来。只在本地
+          // 还是「未命名/自动截断」的会话上生效——本地已有手改标题（或
+          // 项目名标题）时以本地为准，不覆盖。
+          const newTitle = String(data.title ?? '');
+          if (!newTitle) break;
+          setSessions(prev => prev.map(s => {
+            if (s.id !== sid) return s;
+            const untitled = !s.title || s.title === '新会话' || s.title.endsWith('…');
+            if (!untitled) return s;
+            return { ...s, title: newTitle };
+          }));
+          repoRef.current?.noteServerTitle?.(sid, newTitle);
           break;
         }
         case 'chat.notice': {
@@ -1173,12 +1319,205 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void repoRef.current?.setActive(id);
   }, [activeModelId]);
 
+  /**
+   * 新建项目会话（契约 v1 §1.1）。与 createSession 的差别只有三点：
+   * kind='project'、title 用项目名、saveConversation 会把项目字段带上
+   * create 载荷。普通会话的路径一行没动。
+   */
+  // ------------------------------------------------------------------
+  // 项目会话的流程（一问一答）：问答落库在 sidecar（flows.next），这里只管
+  // "正等着哪一步"。异常出口由引擎判定（off_script = 用户没按剧本走 / retry =
+  // 这答的不对劲），界面把 off_script 那句话交给正常对话，不卡人。
+  // ------------------------------------------------------------------
+  /** updateProject 在这下面才声明（const，有 TDZ）：流程回调里要改名，走 ref 转一手。 */
+  const updateProjectRef = useRef<((id: string, patch: { projectName?: string }) => Promise<void>) | null>(null);
+
+  const applyFlowResult = useCallback((
+    sid: string, res: any, flowId: string, answers: Record<string, string>
+  ): { kind?: string } | null => {
+    if (!res || typeof res !== 'object') return null;
+    if (res.kind === 'off_script') {
+      setFlowsWaiting(prev => ({ ...prev, [sid]: undefined }));
+      return res;
+    }
+    const step = res.step;
+    if (!step) return res;
+    // 标题跟着对话走：问到项目名称（接入那条拿到目录）就把占位标题改掉，
+    // 免得会话列表里一排「新项目」。用户自己改过标题的不动。
+    const gotAnswers = (res.answers as Record<string, string> | undefined) ?? answers;
+    const dirName = ((gotAnswers['项目目录'] || '').trim().split(/[\\/]/).filter(Boolean).pop() || '');
+    const shownName = tidyProjectName(gotAnswers['项目名称'] || '') || tidyProjectName(dirName);
+    if (shownName) {
+      const mine = sessionsRef.current.find(x => x.id === sid);
+      if (mine?.kind === 'project' && (!mine.title || mine.title === NEW_PROJECT_TITLE)) {
+        void updateProjectRef.current?.(sid, { projectName: shownName });
+      }
+    }
+    const ended = !!step.end || res.kind === 'done';
+    setFlowsWaiting(prev => ({
+      ...prev,
+      [sid]: {
+        flowId,
+        step,
+        answers: (res.answers as Record<string, string>) ?? answers,
+        warn: res.kind === 'retry' ? (res.warn || '') : '',
+        retryOptions: res.kind === 'retry' ? (res.options || []) : [],
+        retryAnswer: res.kind === 'retry' ? String(res.rejected ?? '') : '',
+        waiting: !ended
+      }
+    }));
+    // 每走一步 sidecar 都往会话里写了消息（问 + 答），重新读一遍才对得上。
+    void repoRef.current?.loadMessages(sid)
+      .then(list => setMessages(prev => ({ ...prev, [sid]: list })))
+      .catch(err => console.warn('[store] flow reload failed', err));
+    if (ended && typeof res.prompt === 'string' && res.prompt.trim()) {
+      setComposerDraft(res.prompt);        // 收尾：整理好的开场任务填进输入框
+    }
+    return res;
+  }, [setComposerDraft]);
+
+  /** 项目会话建好就开口问第一句（老 preload 没有 flows 桥时静默跳过）。 */
+  const startProjectFlow = useCallback((sessionId: string, flowId = 'project-setup') => {
+    const bridge = (getAgent() as { flows?: { next?: (p: unknown) => Promise<unknown> } })?.flows;
+    if (!bridge?.next) return;
+    void bridge.next({ sessionId, flowId })
+      .then((res: unknown) => { applyFlowResult(sessionId, res, flowId, {}); })
+      .catch((err: unknown) => console.warn('[store] startProjectFlow failed', err));
+  }, [applyFlowResult]);
+
+  const answerFlow = useCallback(async (
+    sessionId: string, answer: string, opts?: { force?: boolean }
+  ): Promise<{ kind?: string } | null> => {
+    // 连点保护：上一句还没落地就再点，直接忽略（同一步被答两次就乱了）。
+    if (flowBusyRef.current[sessionId]) return null;
+    const cur = flowsWaitingRef.current[sessionId];
+    if (!cur) return null;
+    const bridge = (getAgent() as { flows?: { next?: (p: unknown) => Promise<unknown> } })?.flows;
+    if (!bridge?.next) {
+      setFlowsWaiting(prev => ({ ...prev, [sessionId]: undefined }));
+      return null;
+    }
+    flowBusyRef.current[sessionId] = true;
+    try {
+      const res = await bridge.next({
+        sessionId,
+        flowId: cur.flowId,
+        stepId: cur.step?.id,
+        answer,
+        answers: cur.answers,
+        force: !!opts?.force
+      });
+      return applyFlowResult(sessionId, res, cur.flowId, cur.answers);
+    } catch (err) {
+      // 走不动就**别再候着**：把这一步撤掉，免得按钮留着点了没反应。
+      console.warn('[store] answerFlow failed', err);
+      setFlowsWaiting(prev => ({ ...prev, [sessionId]: undefined }));
+      return null;
+    } finally {
+      flowBusyRef.current[sessionId] = false;
+    }
+  }, [applyFlowResult]);
+
+  const dismissFlow = useCallback((sessionId: string) => {
+    setFlowsWaiting(prev => ({ ...prev, [sessionId]: undefined }));
+  }, []);
+
+  const createProjectSession = useCallback((input: {
+    projectName: string;
+    workspaceRoot?: string;
+    projectSkills?: string[];
+  }) => {
+    const name = (input.projectName || '').trim();
+    if (!name) return;
+    const nowMs = Date.now();
+    const id = `s-${nowMs}`;
+    const modelId = activeModelId;
+    const newSession: Session = {
+      id,
+      title: name,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+      modelId,
+      kind: 'project',
+      projectName: name,
+      workspaceRoot: input.workspaceRoot?.trim() || null,
+      projectSkills: (input.projectSkills ?? []).slice()
+    };
+    setSessions(prev => sortSessions([newSession, ...prev]));
+    setMessages(prev => ({ ...prev, [id]: [] }));
+    setActiveSessionId(id);
+    setView('chat');
+    setPendingApprovalId(null);
+    // 建好即落库（项目字段随 create 一起上）；失败只记日志，不打断界面。
+    void repoRef.current?.saveConversation(toPersisted(newSession, []))
+      .catch(err => console.warn('[store] createProjectSession persist failed', err));
+    void repoRef.current?.setActive(id);
+    // 建好就让流程开口（2026-10-09 用户口径：项目会话一建好就主动说一句，
+    // 而且是一问一答往下走的流程）。落库、不调模型、零 token。
+    startProjectFlow(id);
+  }, [activeModelId, startProjectFlow]);
+
+  /**
+   * 项目会话元信息局部更新（契约 v1 §1.2）。只把要改的键发给
+   * sessions.updateProject；内存里的会话行就地合并，返回的全量行以响应为准。
+   * 老 preload 没有这个方法（返回 null）时只改本地，保持界面可用。
+   */
+  const updateProject = useCallback(async (
+    sessionId: string,
+    patch: { projectName?: string; workspaceRoot?: string; projectSkills?: string[] }
+  ): Promise<void> => {
+    let res: Record<string, unknown> | null = null;
+    try {
+      res = await repoRef.current?.updateProject?.(sessionId, patch) ?? null;
+    } catch (err) {
+      // 桥上失败（校验不过/会话不在）：按无响应处理，界面保持乐观值。
+      console.warn('[store] updateProject rpc failed', err);
+    }
+    setSessions(prev => prev.map(s => {
+      if (s.id !== sessionId || s.kind !== 'project') return s;
+      const next: Session = { ...s };
+      // Response is authoritative for every key it carries.
+      if (res && typeof res === 'object') {
+        if (typeof res.projectName === 'string') next.projectName = res.projectName;
+        if (typeof res.workspaceRoot === 'string' || res.workspaceRoot === null) {
+          next.workspaceRoot = (res.workspaceRoot as string | null) ?? null;
+        }
+        if (Array.isArray(res.projectSkills)) next.projectSkills = res.projectSkills.map(String);
+        if (res.projectName !== undefined && typeof res.projectName === 'string') {
+          next.title = res.projectName;
+        }
+      } else {
+        // No bridge answer: apply the optimistic patch as-is.
+        if (patch.projectName !== undefined) {
+          next.projectName = patch.projectName;
+          next.title = patch.projectName;
+        }
+        if (patch.workspaceRoot !== undefined) next.workspaceRoot = patch.workspaceRoot || null;
+        if (patch.projectSkills !== undefined) next.projectSkills = patch.projectSkills.slice();
+      }
+      return next;
+    }));
+    persistImmediate(sessionId);
+    // 项目名定下来要当会话标题（2026-10-09 用户口径）。引擎的
+    // sessions.updateProject 只认项目字段、不碰 title，所以标题得单独推一次：
+    // 靠 debounce 那次 saveConversation 顺手同步是靠不住的——它读的是改名前的
+    // state（实测：库里 title 一直停在「新项目」，重启就露馅）。这里等桥一趟，
+    // 改名当刻就落库。
+    if (patch.projectName && patch.projectName.trim()) {
+      void repoRef.current?.rename?.(sessionId, patch.projectName.trim());
+    }
+  }, []);
+
+  useEffect(() => { updateProjectRef.current = updateProject; }, [updateProject]);
+
   const renameSession = useCallback((id: string, title: string) => {
     const clean = title.trim();
     if (!clean) return;
     setSessions(prev =>
       prev.map(s => (s.id === id ? { ...s, title: clean } : s))
     );
+    // 手改的标题也别只存在内存里：直接推一次，落库不靠 debounce。
+    void repoRef.current?.rename?.(id, clean)?.catch?.(() => {});
     persistImmediate(id);
   }, []);
 
@@ -1356,6 +1695,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       return sortSessions(next);
     });
+    // 项目会话的标题跟着对话走（2026-10-09 用户口径：项目名称定下来就作为这个
+    // 会话的标题）。两条路都要盖住：流程问名字那条在 applyFlowResult 里改名；
+    // 这里盖另一条 —— 流程判 off_script 之后由模型按 project-start skill 问名字，
+    // 界面从「上一句在问名字」推断这一句就是名字。
+    const mine = sessionsRef.current.find(s => s.id === id);
+    if (mine?.kind === 'project' && (!mine.title || mine.title === NEW_PROJECT_TITLE)) {
+      const ask = [...(messagesRef.current[id] || [])]
+        .reverse().find(m => m.role === 'assistant' && !!m.content)?.content || '';
+      const flat = text.replace(/\s+/g, ' ').trim();
+      // 边界：只收短的、像名字的回复；长句子多半在聊别的，别乱改标题。
+      if (/\u9879\u76ee\u540d/.test(ask) && flat && flat.length <= 24) {
+        const name = tidyProjectName(flat);
+        if (name) void updateProjectRef.current?.(id, { projectName: name });
+      }
+    }
+
     setIsStreaming(true);
     setLastError(null);
     persistSoon(id);
@@ -1405,7 +1760,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .catch(e => {
         const msg = e instanceof Error ? e.message : String(e);
         setLastError(msg);
-        appendNotice(id, `[错误] 发送失败：${msg}`);
+        appendNotice(id, `[错误] 发送失败：${humanizeSendError(msg)}`);
         endStreaming(id);
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1465,20 +1820,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingApprovalId, isStreaming, sidebarCollapsed, hydrated,
     sidecarState, lastError, compactionNotices, lastPromptTokens, pendingRun,
     thinkingDisplay, appSettings,
+    composerDraft,
+    flowsWaiting,
     turnOverrides: (turnOverridesBySession[activeSessionId] || {})[activeModelId] || {},
     sessionOverrides: turnOverridesBySession[activeSessionId] || {},
     subagentBatch
   };
 
   const actions: Actions = {
-    setView, selectSession, createSession, toggleSidebar,
+    setView, selectSession, createSession, createProjectSession, updateProject, toggleSidebar,
+    startProjectFlow, answerFlow, dismissFlow,
     setActiveModel,
     approveApproval, denyApproval, send, stopStreaming,
     updateModel, addModel, deleteModel, addRule, deleteRule, resolveTool,
     renameSession, deleteSession, togglePin, exportSession,
     refreshModels, saveModel, removeModel, setDefaultModel,
     dismissCompactionNotice, setThinkingDisplay, setTurnOverride, setModelOverride,
-    setAppSettings, resumeRun, dismissPendingRun
+    setAppSettings, resumeRun, dismissPendingRun, setComposerDraft
   };
 
   return <Ctx.Provider value={{ ...state, ...actions }}>{children}</Ctx.Provider>;
