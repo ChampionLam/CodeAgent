@@ -199,8 +199,8 @@ export function Sidebar() {
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="搜索会话"
-          aria-label="搜索会话"
+          placeholder="搜索会话/项目"
+          aria-label="搜索会话/项目"
         />
         {query && (
           <button className="sidebar__search-clear" onClick={() => setQuery('')}>
@@ -209,28 +209,16 @@ export function Sidebar() {
         )}
       </div>
 
+      {/* 2026-10-12 用户点名：项目列表放到会话上面（项目在上、会话在下）。
+          两个分区整体对调，分区内部逻辑（时间分组 / 5 条 + 查看全部 / 折叠持久化）不变。 */}
       <nav className="sidebar__list" aria-label="会话列表">
         {groups.chatGroups.length === 0 && groups.projects.length === 0 && (
           <div className="sidebar__empty">没有匹配的会话</div>
         )}
 
-        {/* ── 会话分区：kind 缺省/未知都算 chat。搜索过滤空 → 整段隐藏。 ── */}
-        {groups.chatGroups.length > 0 && (
-          <section className="sidebar__section" aria-label="会话">
-            {groups.chatGroups.map(g => (
-              <div key={g.label} className="sidebar__group">
-                <div className="sidebar__group-label">{g.label}</div>
-                {g.items.map(s => (
-                  <SessionRow key={s.id} s={s} />
-                ))}
-              </div>
-            ))}
-          </section>
-        )}
-
-        {/* ── 项目分区：只列最近 N 条，标题行带折叠开关（持久化）。 ── */}
+        {/* ── 项目分区（在上）：只列最近 N 条，标题行带折叠开关（持久化）。 ── */}
         {groups.projects.length > 0 && (
-          <section className="sidebar__section" aria-label="项目">
+          <section className="sidebar__section sidebar__section--projects" aria-label="项目">
             <div className="sidebar__group-label sidebar__group-label--head">
               <button
                 className="sidebar__section-toggle"
@@ -258,6 +246,20 @@ export function Sidebar() {
                 )}
               </>
             )}
+          </section>
+        )}
+
+        {/* ── 会话分区（在下）：kind 缺省/未知都算 chat。搜索过滤空 → 整段隐藏。 ── */}
+        {groups.chatGroups.length > 0 && (
+          <section className="sidebar__section" aria-label="会话">
+            {groups.chatGroups.map(g => (
+              <div key={g.label} className="sidebar__group">
+                <div className="sidebar__group-label">{g.label}</div>
+                {g.items.map(s => (
+                  <SessionRow key={s.id} s={s} />
+                ))}
+              </div>
+            ))}
           </section>
         )}
       </nav>

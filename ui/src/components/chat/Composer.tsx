@@ -24,7 +24,10 @@ function pathOf(file: File): string {
 }
 
 export function Composer() {
-  const { send, isStreaming, stopStreaming } = useApp();
+  const {
+    send, isStreaming, stopStreaming, composerDraft, setComposerDraft,
+    flowsWaiting, answerFlow, dismissFlow, activeSessionId
+  } = useApp();
   const [value, setValue] = useState('');
   const [focused, setFocused] = useState(false);
   const [images, setImages] = useState<string[]>([]);
@@ -51,6 +54,24 @@ export function Composer() {
     const max = lineHeight * MAX_ROWS + 20;
     ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
   }, [value]);
+
+  // 项目会话开场引导卡上的按钮把提示词「搬」进输入框：只填不发送，用户还能改。
+  // 搬完立刻清掉这份草稿 —— 否则切回这个会话/重挂载时会被再塞一遍。光标落末尾。
+  useEffect(() => {
+    if (!composerDraft) return;
+    setValue(composerDraft);
+    setComposerDraft('');
+    const ta = taRef.current;
+    if (ta) {
+      ta.focus();
+      const end = composerDraft.length;
+      try {
+        ta.setSelectionRange(end, end);
+      } catch {
+        /* 某些浏览器在未挂载时抛 —— 焦点已经给了，无所谓 */
+      }
+    }
+  }, [composerDraft, setComposerDraft]);
 
   // 应用自带截图（截图按钮 / Ctrl+Shift+S）在主进程里跑，成品以临时文件路径回来，直接进附件。
   useEffect(() => {
@@ -104,6 +125,20 @@ export function Composer() {
   const submit = () => {
     const text = value.trim();
     if ((!text && images.length === 0) || isStreaming) return;
+    // 项目会话的流程正等着回答：这句话先交给流程判断（它落了库、也认得选项），
+    // 而不是直接发给模型。用户**没按剧本走**时流程当场收尾（off_script），
+    // 这时才把原话按普通消息发出去 —— 不把人卡在流程里（2026-10-09 用户口径）。
+    const flow = flowsWaiting[activeSessionId];
+    // 带图/带附件的一律走普通对话：流程是"一问一答"，收不下附件，硬塞会卡住。
+    if (flow?.waiting && images.length > 0) dismissFlow(activeSessionId);
+    if (flow?.waiting && text && images.length === 0) {
+      setValue('');
+      void answerFlow(activeSessionId, text).then((res: { kind?: string } | null) => {
+        if (res?.kind === 'off_script') send(text);
+      });
+      requestAnimationFrame(() => taRef.current?.focus());
+      return;
+    }
     // Image-only turns still need an instruction for the model to act on.
     // Document attachments carry extracted text, so a generic instruction suffices.
     const onlyDocs = images.length > 0 && images.every(isDocPath);
@@ -193,7 +228,7 @@ export function Composer() {
             onPaste={onPaste}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder={isStreaming ? 'Agent 正在执行…' : '向 Agent 发送任务…'}
+            placeholder={isStreaming ? 'Agent 正在执行…' : '向 Agent 发送消息…'}
             rows={1}
             aria-label="消息输入框"
           />
