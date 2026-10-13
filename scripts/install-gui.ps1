@@ -1,7 +1,13 @@
-# CodeAgent 可视化安装向导 (v19, task t_941de5b6)
+﻿# CodeAgent 可视化安装向导 (v19.1, task t_fc1dd5a0)
 # PowerShell 5.1 + WinForms -- 无任何第三方依赖,不需要 Python/Node/管理员权限。
 # 收集参数后调用 scripts/install.ps1 完成实际安装(复用,不重写)。
 # 用法: 双击 install-gui.bat,或右键 install-gui.ps1 -> 使用 PowerShell 运行。
+#
+# 【PS 5.1 陷阱,勿再踩】在 New-Object <Type>(a, $var - 3) 这类参数表里,
+# 逗号比二元运算符结合得更紧:PS 5.1 会解析成 (a, $var) - 3,对 Object[] 做
+# op_Subtraction,运行即崩「不包含名为 op_Subtraction 的方法」。PS 7 宽容,
+# 所以 Linux 上的一切静态检查/单测都发现不了。凡 New-Object 参数表里的
+# $var ± N 必须写成 ($var - N)。
 
 $ErrorActionPreference = "Stop"
 
@@ -76,7 +82,7 @@ function Pick-Dir([string]$Title) {
 # ---------------------------------------------------------------------------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "CodeAgent 可视化安装向导"
-$form.Size = New-Object System.Drawing.Size(720, 660)
+$form.Size = New-Object System.Drawing.Size(500, 720)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -86,32 +92,32 @@ function New-Label([string]$Text, [int]$Top) {
     $l = New-Object System.Windows.Forms.Label
     $l.Text = $Text
     $l.Location = New-Object System.Drawing.Point(16, $Top)
-    $l.Size = New-Object System.Drawing.Size(680, 20)
+    $l.Size = New-Object System.Drawing.Size(468, 20)
     $form.Controls.Add($l)
     return $l
 }
 
 # --- 第一步:Python / Node 路径 ---------------------------------------------
-New-Label "第 1 步:已有的 Python / Node(选填。留空 = 我没有,帮我装进 CodeAgent 目录)" $y | Out-Null
+New-Label "第 1 步:已有的 Python / Node" $y | Out-Null
 $y += 26
 
 $lblPy = New-Object System.Windows.Forms.Label
 $lblPy.Text = "python.exe 路径:"
 $lblPy.Location = New-Object System.Drawing.Point(16, $y)
-$lblPy.Size = New-Object System.Drawing.Size(100, 20)
+$lblPy.Size = New-Object System.Drawing.Size(96, 20)
 $form.Controls.Add($lblPy)
 $txtPy = New-Object System.Windows.Forms.TextBox
-$txtPy.Location = New-Object System.Drawing.Point(120, $y - 3)
-$txtPy.Size = New-Object System.Drawing.Size(440, 24)
+$txtPy.Location = New-Object System.Drawing.Point(118, ($y - 3))
+$txtPy.Size = New-Object System.Drawing.Size(214, 24)
 $form.Controls.Add($txtPy)
 $btnPyBrowse = New-Object System.Windows.Forms.Button
 $btnPyBrowse.Text = "浏览…"
-$btnPyBrowse.Location = New-Object System.Drawing.Point(570, $y - 4)
-$btnPyBrowse.Size = New-Object System.Drawing.Size(70, 26)
+$btnPyBrowse.Location = New-Object System.Drawing.Point(346, ($y - 4))
+$btnPyBrowse.Size = New-Object System.Drawing.Size(68, 26)
 $form.Controls.Add($btnPyBrowse)
 $btnPyProbe = New-Object System.Windows.Forms.Button
 $btnPyProbe.Text = "检测"
-$btnPyProbe.Location = New-Object System.Drawing.Point(646, $y - 4)
+$btnPyProbe.Location = New-Object System.Drawing.Point(420, ($y - 4))
 $btnPyProbe.Size = New-Object System.Drawing.Size(56, 26)
 $form.Controls.Add($btnPyProbe)
 $y += 32
@@ -122,20 +128,20 @@ $y += 30
 $lblNode = New-Object System.Windows.Forms.Label
 $lblNode.Text = "node.exe 路径:"
 $lblNode.Location = New-Object System.Drawing.Point(16, $y)
-$lblNode.Size = New-Object System.Drawing.Size(100, 20)
+$lblNode.Size = New-Object System.Drawing.Size(96, 20)
 $form.Controls.Add($lblNode)
 $txtNode = New-Object System.Windows.Forms.TextBox
-$txtNode.Location = New-Object System.Drawing.Point(120, $y - 3)
-$txtNode.Size = New-Object System.Drawing.Size(440, 24)
+$txtNode.Location = New-Object System.Drawing.Point(118, ($y - 3))
+$txtNode.Size = New-Object System.Drawing.Size(214, 24)
 $form.Controls.Add($txtNode)
 $btnNodeBrowse = New-Object System.Windows.Forms.Button
 $btnNodeBrowse.Text = "浏览…"
-$btnNodeBrowse.Location = New-Object System.Drawing.Point(570, $y - 4)
-$btnNodeBrowse.Size = New-Object System.Drawing.Size(70, 26)
+$btnNodeBrowse.Location = New-Object System.Drawing.Point(346, ($y - 4))
+$btnNodeBrowse.Size = New-Object System.Drawing.Size(68, 26)
 $form.Controls.Add($btnNodeBrowse)
 $btnNodeProbe = New-Object System.Windows.Forms.Button
 $btnNodeProbe.Text = "检测"
-$btnNodeProbe.Location = New-Object System.Drawing.Point(646, $y - 4)
+$btnNodeProbe.Location = New-Object System.Drawing.Point(420, ($y - 4))
 $btnNodeProbe.Size = New-Object System.Drawing.Size(56, 26)
 $form.Controls.Add($btnNodeProbe)
 $y += 32
@@ -144,19 +150,19 @@ $lblNodeResult.ForeColor = [System.Drawing.Color]::Gray
 $y += 36
 
 # --- 第二步:安装目录 --------------------------------------------------------
-New-Label "第 2 步:安装位置(将在此目录下创建 CodeAgent 子目录并全部装进去)" $y | Out-Null
+New-Label "第 2 步:安装位置" $y | Out-Null
 $y += 26
 $txtDir = New-Object System.Windows.Forms.TextBox
-$txtDir.Location = New-Object System.Drawing.Point(16, $y - 3)
-$txtDir.Size = New-Object System.Drawing.Size(544, 24)
+$txtDir.Location = New-Object System.Drawing.Point(16, ($y - 3))
+$txtDir.Size = New-Object System.Drawing.Size(330, 24)
 $form.Controls.Add($txtDir)
 $btnDirBrowse = New-Object System.Windows.Forms.Button
 $btnDirBrowse.Text = "浏览…"
-$btnDirBrowse.Location = New-Object System.Drawing.Point(570, $y - 4)
-$btnDirBrowse.Size = New-Object System.Drawing.Size(132, 26)
+$btnDirBrowse.Location = New-Object System.Drawing.Point(352, ($y - 4))
+$btnDirBrowse.Size = New-Object System.Drawing.Size(126, 26)
 $form.Controls.Add($btnDirBrowse)
 $y += 32
-$lblDirHint = New-Label "目标 = <上面的目录>\CodeAgent(支持中文、空格路径;全程无需管理员权限)" $y
+$lblDirHint = New-Label "目标 = <上面的目录>\CodeAgent" $y
 $lblDirHint.ForeColor = [System.Drawing.Color]::Gray
 $y += 30
 
@@ -169,8 +175,8 @@ $btnInstall.Font = New-Object System.Drawing.Font("Microsoft YaHei UI", 9, [Syst
 $form.Controls.Add($btnInstall)
 $lblStep = New-Label "等待开始" ($y + 7)
 $lblStep.ForeColor = [System.Drawing.Color]::DimGray
-$lblStep.Location = New-Object System.Drawing.Point(150, $y + 7)
-$lblStep.Size = New-Object System.Drawing.Size(550, 20)
+$lblStep.Location = New-Object System.Drawing.Point(150, ($y + 7))
+$lblStep.Size = New-Object System.Drawing.Size(334, 20)
 $y += 44
 
 $chkNoShortcut = New-Object System.Windows.Forms.CheckBox
@@ -186,7 +192,7 @@ $txtLog.ReadOnly = $true
 $txtLog.ScrollBars = "Vertical"
 $txtLog.Font = New-Object System.Drawing.Font("Consolas", 8.5)
 $txtLog.Location = New-Object System.Drawing.Point(16, $y)
-$txtLog.Size = New-Object System.Drawing.Size(686, 320)
+$txtLog.Size = New-Object System.Drawing.Size(468, 330)
 $form.Controls.Add($txtLog)
 
 function Log-Line([string]$s) {
@@ -248,11 +254,14 @@ $btnInstall.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("请先填写安装父目录(第 2 步)。", "提示", "OK", "Warning") | Out-Null
         return
     }
-    if ($parent -notmatch '^[A-Za-z]:\') {
+    if ($parent -notmatch '^[A-Za-z]:\\') {
         [System.Windows.Forms.MessageBox]::Show("安装目录需要是一个本地磁盘的绝对路径,例如 D:\software。当前输入: $parent", "提示", "OK", "Warning") | Out-Null
         return
     }
-    $target = Join-Path (Join-Path $parent "CodeAgent") ""
+    $target = (Join-Path $parent "CodeAgent").TrimEnd('\')   # v19.2: no trailing separator!
+    # A trailing backslash inside the quoted -InstallDir argument becomes
+    # \" (an escaped quote) and breaks the whole command line: install.ps1
+    # exits 1 with no output at all (real-machine repro 2026-10-13 09:51).
 
     # 探测填了的路径是否可用(不阻塞,给红字提示,用户自己决定)
     if ($pyPath) {
