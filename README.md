@@ -127,7 +127,7 @@ Linux / macOS 上把 `python` 换成 `python3`。
 
 - **命令审批是防手滑的 UX 护栏，不是安全边界。** `python/guard.py` 是黑名单正则（要求命令名落在命令位上），必然有绕过面：`/bin/rm -rf /`、`rm$IFS-rf$IFS/`、`X=rm; $X -rf /`、`xargs rm`、`find . -delete`、`python -c "import shutil; shutil.rmtree('/')"` 都不会被拦（这些是实测结论，不是推测）。它拦的是**手滑**，不是恶意。
 - 真正的安全边界在**网络层**（`python/web/egress.py`：私网拒绝、DNS 钉死、跨站重定向重验、字节上限）与**密钥治理**（key 只走 `.env`，界面不回读、不显示、不入日志）。
-- **第二层（可选）：本地判定模型提示层。** 正则放行的 `run_shell` 命令会再过一次本地小模型（DecisionBert int8，跑在独立子进程里，空闲后自动收回内存），它给的只是「要不要问用户」的提示概率，不是硬闸门。模型文件约 97.7 MiB **不进仓库**，要自己投放到 `python/models/decision_bert/`（投放说明与模型卡见 `docs/decision-bert-model.md`）；文件没投放、依赖缺失或推理超时都会**静默降级为纯正则**，不影响 agent 可用性。
+- **第二层（可选）：本地判定模型提示层。** 正则放行的 `run_shell` 命令会再过一次本地小模型（DecisionBert v6 fp16，跑在独立子进程里，空闲后自动收回内存），它给的只是「要不要问用户」的提示概率，不是硬闸门。模型文件约 196.6 MiB（`decision_bert.onnx` + `.onnx.data`，超过 GitHub 100 MiB 单文件线）**不进仓库**，要自己投放到 `python/models/decision_bert/`（投放说明与模型卡见 `docs/decision-bert-model.md`）；文件没投放、依赖缺失或推理超时都会**静默降级为纯正则**，不影响 agent 可用性。模型/tokenizer/校准器必须成套：词表不匹配 serve.py 会启动即报错（fail loud）。
 - agent 以**你当前用户的权限**运行：没有容器 / 沙箱隔离，也没有权限分级与工作区概念。第一次运行前请想清楚这一点。
 - 普通操作（任意目录读写、跑普通 shell、联网）不逐次弹审批；只有 `guard.py` 判为危险模式的命令才会在会话里出审批卡片，且没有「总是允许」。
 
