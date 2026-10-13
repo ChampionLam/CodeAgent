@@ -695,6 +695,57 @@
 #        calibrator*.json are on the v23 model-artifact exemption
 #        list (t_d37fca26); the downloaded files add no sweep risk --
 #        and the sweep must never treat the model tree as a leak.
+#
+#   - v29 (task t_c3d4e1f2, 2026-10-14). REUSE THE MACHINE'S OWN
+#     NODE / PYTHON (user, 2026-10-13, translated from Chinese: "I
+#     pointed the installer at my python and node and it STILL
+#     downloaded node and copied python over -- I wanted it to use
+#     the existing environments directly"). Node had NO reuse at
+#     all (only <InstallDir>\runtime\node, -NodeArchive, or a
+#     download); Python had -PythonPath but the field user could
+#     not tell whether it had actually won. Fixes:
+#     a) NEW -NodePath <exe>: explicit reuse. No download, no
+#        archive, no copy into runtime\node. The exe is executed
+#        (node --version) before being trusted; a major version
+#        below the pinned $NodeVersion, or an exe that does not
+#        run, is a HARD error -- the user typed the path.
+#     b) Auto-discovery when -NodePath is absent: PATH
+#        (Get-Command node) then common locations
+#        (%ProgramFiles%\nodejs, %ProgramFiles(x86)%\nodejs,
+#        %LOCALAPPDATA%\Programs\nodejs, nodist, nvm-windows
+#        symlinks under %LOCALAPPDATA% and %APPDATA%). Every
+#        candidate runs node --version; first one whose MAJOR >=
+#        the pinned major is reused. Unsuitable candidates are
+#        REPORTED (Phase 0 rows) with the reason, so "found but
+#        not used" is never silent. When nothing qualifies the
+#        behavior is EXACTLY the old one: pre-laid runtime\node >
+#        -NodeArchive > package-dir cache > download.
+#        A pre-laid <InstallDir>\runtime\node still outranks any
+#        external node (self-contained installs keep their
+#        semantics byte-for-byte).
+#     c) Phase 0 prints an explicit node decision row shaped
+#        "node  OK  reuse <path> (no download)" plus a
+#        "node decision" row; the conclusion's SKIP line says
+#        "node runtime: NO DOWNLOAD -- reusing <path>".
+#     d) Launcher + build path: when the resolved node is EXTERNAL
+#        (outside <InstallDir>), CodeAgent.bat gets a fallback
+#        block -- runtime\node is prepended only IF it exists
+#        (old behavior kept), and npm/node resolve from the
+#        system PATH otherwise. Invoke-AppBuild prepends the
+#        external node's dir to PATH for the build process too.
+#     e) PYTHON: -PythonPath is confirmed first priority and
+#        cannot be overridden by -ForceOwnRuntime (Find-Python's
+#        explicit branch runs BEFORE the ForceOwnRuntime branch;
+#        conda base included -- the explicit path is the user's
+#        intent). Phase 0's python "decision" row already carries
+#        the interpreter; the completion report now prints a
+#        "python interpreter" line with path + version + reuse
+#        vs newly-bootstrapped provenance.
+#     v29 logic is smoke-tested on pwsh 7 (Linux) via the new
+#     v29-node-reuse.ps1 selfcheck (AST-extracted functions, fake
+#     node.exe stubs, launcher-content asserts); Windows-only
+#     surfaces (real node.exe, Get-Command PATH resolution on
+#     Windows, the .bat under cmd) remain real-machine pending.
 param(
     [string]$InstallDir = "",
     # v7: unified package/archive directory. Defaults to
@@ -707,6 +758,20 @@ param(
     [int]$ProbeTimeoutSec = 10,
     [switch]$CheckOnly,
     [string]$PythonPath = "",
+    # v29 (task t_c3d4e1f2, 2026-10-14). REUSE AN EXISTING NODE.EXE.
+    # Explicit beats everything: no download, no -NodeArchive, no
+    # copy into <InstallDir>\runtime\node. The exe is executed once
+    # (node --version) to prove it runs; the reported version must be
+    # >= the major of the pinned $NodeVersion. Incompatible or broken
+    # -> HARD error (the user typed the path; silently ignoring it
+    # was the exact field complaint this param fixes). Interacts with
+    # the other node sources:
+    #   -NodePath (explicit) > -NoNode (switch wins only by being
+    #   evaluated first in the caller) > <InstallDir>\runtime\node
+    #   (pre-laid, kept for self-contained installs) > -NodeArchive
+    #   > package-dir cache > download. Auto-discovery (PATH, common
+    #   locations) fills the same slot when -NodePath is absent.
+    [string]$NodePath = "",
     # Local archive paths for air-gapped installs. When set, they
     # replace the network download for that runtime.
     [string]$PythonArchive = "",
@@ -1635,6 +1700,125 @@ function Find-Python([string]$Explicit, [string]$InstallDir) {
         return @{ Exe = $c.Exe; Reason = "$($c.Source) ($($c.Version))"; Candidates = $candidates }
     }
     return @{ Exe = $null; Reason = "no usable Python found -- will bootstrap the pinned official $PythonVersion runtime"; Candidates = $candidates }
+}
+
+# ---------------------------------------------------------------------------
+# v29 (task t_c3d4e1f2): NODE discovery + decision, mirroring Find-Python.
+# Node had NO reuse path at all (only <InstallDir>\runtime\node,
+# -NodeArchive, or a download -- the exact field complaint). Decision
+# order, evaluated by the CALLER (step 2d) with $NoNode first:
+#   1. -NodePath (explicit; HAD error when absent/broken/old-major)
+#   2. <InstallDir>\runtime\node\node.exe (pre-laid -- self-contained
+#      installs keep their semantics; an internal runtime outranks
+#      any external node so old installs never flip behavior)
+#   3. auto-discovered node (PATH first, then common locations),
+#      usable and major >= the pinned $NodeVersion major
+#   4. none -> the caller keeps the OLD chain (-NodeArchive /
+#      package-dir cache / download)
+# Every candidate is ACTUALLY EXECUTED (node --version) before it is
+# trusted; a candidate that runs but is too old is REPORTED (never
+# silently used, never silently hidden). Returns:
+#   @{ Exe = path or $null; Reason = short text; Candidates = @(...) }
+# with candidates @{ Exe; Source; Version; Selected; SkipReason }.
+# ---------------------------------------------------------------------------
+
+# Major number of a node version string ("v22.20.0"/"22.20.0" -> 22).
+function Get-NodeMajor([string]$Version) {
+    if (-not $Version) { return 0 }
+    $v = ([string]$Version).Trim()
+    if ($v -match '^v?(\d+)') { return [int]$Matches[1] }
+    return 0
+}
+
+# v29: major-version gate. The pinned default is v22.20.0; the app
+# needs >= the PINNED MAJOR (22), not the exact pinned patch -- a
+# machine's v22.14.0 is fine, a v20.x is not. $NodeVersion remains
+# the declared pin for the DOWNLOADED runtime only.
+function Test-NodeVersionOk([string]$Ver, [string]$Pinned) {
+    $maj = Get-NodeMajor $Ver
+    if ($maj -le 0) { return $false }
+    $need = Get-NodeMajor $Pinned
+    return ($maj -ge $need)
+}
+
+# Execute a node.exe once; returns the trimmed "vX.Y.Z" string or $null.
+function Get-NodeVersionProbe([string]$Exe) {
+    $ver = $null
+    try { $ver = (& $Exe --version) } catch { }
+    if ($ver) { return ([string]$ver).Trim() }
+    return $null
+}
+
+# v29: discover node candidates. Explicit -NodePath, then PATH
+# (Get-Command node), then bounded common install locations. Every
+# found exe is probed exactly once (read-only).
+function Get-NodeCandidates([string]$Explicit) {
+    $script:NodeCandidateOrder = @()
+    $script:NodeCandidateSource = @{}
+    function Add-NodeCandidate([string]$Exe, [string]$Source) {
+        if (-not $Exe) { return }
+        $Exe = $Exe.ToLower()
+        if (-not $script:NodeCandidateSource.ContainsKey($Exe)) {
+            $script:NodeCandidateOrder += $Exe
+            $script:NodeCandidateSource[$Exe] = $Source
+        }
+    }
+    if ($Explicit) {
+        if (Test-PathSafe $Explicit) { Add-NodeCandidate $Explicit "-NodePath" }
+        else { throw "[install] -NodePath not found: $Explicit" }
+    }
+    # PATH first (the shell the user launches from is their intent)
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($nodeCmd -and $nodeCmd.Source) { Add-NodeCandidate $nodeCmd.Source "PATH (node)" }
+    # bounded common locations (no disk sweep)
+    $nodeLocs = @()
+    if ($env:ProgramFiles)         { $nodeLocs += (Join-Path $env:ProgramFiles "nodejs\node.exe") }
+    try { $pf86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)") } catch { $pf86 = $null }
+    if ($pf86)                     { $nodeLocs += (Join-Path $pf86 "nodejs\node.exe") }
+    if ($env:LOCALAPPDATA)         { $nodeLocs += (Join-Path $env:LOCALAPPDATA "Programs\nodejs\node.exe") }
+    # nvm-windows / nodist style shims live under these roots
+    if ($env:LOCALAPPDATA)         { $nodeLocs += (Join-Path $env:LOCALAPPDATA "nodejs\node.exe") }
+    if ($env:APPDATA)              { $nodeLocs += (Join-Path $env:APPDATA "nvm\node.exe") }
+    if ($env:NVM_HOME)             { $nodeLocs += (Join-Path $env:NVM_HOME "nodejs\node.exe") }
+    foreach ($loc in $nodeLocs) {
+        if ($loc -and (Test-PathSafe $loc)) { Add-NodeCandidate $loc "common location ($loc)" }
+    }
+    # probe every candidate and build the result list
+    $out = @()
+    foreach ($exe in $script:NodeCandidateOrder) {
+        $src = $script:NodeCandidateSource[$exe]
+        $skip = ""
+        $ver = Get-NodeVersionProbe $exe
+        if (-not $ver) {
+            $skip = "present but failed to run node --version"
+        } elseif (-not (Test-NodeVersionOk $ver $NodeVersion)) {
+            $skip = "node $ver is below the pinned major $(Get-NodeMajor $NodeVersion) (from $NodeVersion) -- not reused"
+        }
+        $out += @{
+            Exe = $exe; Source = $src; Version = $ver
+            Selected = $false; SkipReason = $skip
+        }
+    }
+    # v15 discipline: @() keeps this an ARRAY even with 0/1 elements.
+    return @($out)
+}
+
+# v29: the node DECISION for EXTERNAL reuse only. This function
+# NEVER looks at <InstallDir>\runtime\node -- the caller checks the
+# pre-laid runtime FIRST (it outranks external reuse so existing
+# self-contained installs never flip behavior). Returns
+# @{ Exe; Reason; Candidates } where Exe is $null when nothing
+# external qualifies (caller then keeps the old chain).
+function Find-NodeExternal([string]$Explicit) {
+    $candidates = Get-NodeCandidates $Explicit
+    foreach ($c in $candidates) {
+        if ($c.SkipReason) { continue }
+        $c.Selected = $true
+        $reason = "reuse $($c.Source) ($($c.Version)) -- no download, no copy into <InstallDir>\runtime\node"
+        return @{ Exe = $c.Exe; Reason = $reason; Candidates = $candidates }
+    }
+    $reason = "no reusable external node (nothing on PATH or in common locations with major >= $(Get-NodeMajor $NodeVersion)) -- keeping the runtime bootstrap chain"
+    return @{ Exe = $null; Reason = $reason; Candidates = $candidates }
 }
 
 # ---------------------------------------------------------------------------
@@ -3015,6 +3199,53 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
             Add-Row "node" $name "MISSING" "not on PATH (optional; installer can bootstrap a private runtime)"
         }
     }
+
+    # 2b. v29: NODE decision (reuse the machine's own node when
+    # possible). Order: -NodePath (explicit) > pre-laid
+    # <InstallDir>\runtime\node (self-contained installs unchanged)
+    # > auto-discovered external node (PATH, then common locations,
+    # major >= pinned major) > old chain (archive/cache/download).
+    # The decision is computed here ONCE (Phase 0 is read-only) and
+    # surfaced as explicit rows; the install phase re-derives it the
+    # same way. Unsuitable candidates get a row with the REASON.
+    $runtimeNodeCheck = $(if ($CheckInstallDir) { Join-Path $CheckInstallDir "runtime\node\node.exe" } else { $null })
+    $out.HasRuntimeNode = (Test-PathSafe $runtimeNodeCheck)
+    $nodeDecision = $null
+    if (-not $NoNode) {
+        if ($out.HasRuntimeNode) {
+            # pre-laid internal runtime outranks everything external
+            # (old self-contained installs never flip behavior)
+            $verInternal = $null
+            try { $verInternal = (& $runtimeNodeCheck --version) } catch { }
+            $nodeDecision = @{ Exe = $runtimeNodeCheck; Reason = "<InstallDir>\runtime\node (pre-laid, $verInternal) -- reuse, external node ignored"; Candidates = @() }
+            Add-Row "node" "node decision" "OK" "reuse the PRE-LAID runtime\\node ($verInternal) -- external node not considered (self-contained install)"
+        } else {
+            $nodeDecision = Find-NodeExternal $NodePath
+            foreach ($c in $nodeDecision.Candidates) {
+                if ($c.Selected) {
+                    Add-Row "node" "node: $($c.Exe)" "OK" "reuse $($c.Exe) (no download) -- $($c.Source), node $($c.Version)"
+                } elseif ($c.SkipReason) {
+                    $verFrag = ""
+                    if ($c.Version) { $verFrag = "node $($c.Version), " }
+                    Add-Row "node" "node: $($c.Exe)" "SKIP" "$($c.Source), $verFrag$($c.SkipReason)"
+                } else {
+                    Add-Row "node" "node: $($c.Exe)" "OK" "$($c.Source), node $($c.Version) (usable, not selected -- lower precedence)"
+                }
+            }
+            if ($nodeDecision.Exe) {
+                Add-Row "node" "node decision" "OK" "reuse $($nodeDecision.Exe) (no download) -- $($nodeDecision.Reason)"
+            } else {
+                # old chain (archive / cache / download), reasons above
+                Add-Row "node" "node decision" "SKIP" $nodeDecision.Reason
+            }
+        }
+        $out.NodeDecision = $nodeDecision
+        $out.NodeExternalReuse = [bool]$nodeDecision.Exe
+    } else {
+        $out.NodeDecision = $null
+        $out.NodeExternalReuse = $false
+        Add-Row "node" "node decision" "SKIP" "-NoNode: node bootstrap entirely disabled"
+    }
     $tarCmd = Get-Command tar -ErrorAction SilentlyContinue
     if ($tarCmd) { Add-Row "tools" "tar" "OK" $tarCmd.Source }
     else { Add-Row "tools" "tar" "MISSING" "not on PATH (needed to extract the python runtime; Win10 1803+ ships bsdtar)" }
@@ -3031,6 +3262,11 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
             Add-Row "install" "runtime\python" "MISSING" "not present"
         }
         $runtimeNode = Join-Path $CheckInstallDir "runtime\node\node.exe"
+        # v29: HasRuntimeNode was already set in section 2b (the node
+        # decision runs BEFORE the existing-install section so the
+        # decision rows print next to the node/npm rows); the line
+        # below re-computes the identical value and is kept as a
+        # belt-and-braces assertion for readers of this section.
         $out.HasRuntimeNode = Test-Path -LiteralPath $runtimeNode
         if ($out.HasRuntimeNode) {
             $ver = $null; try { $ver = (& $runtimeNode --version) } catch { }
@@ -3288,7 +3524,16 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
     }
     if (-not $out.HasVenv) { $mustInstall += "venv + pip deps (~150 MB wheels, mirror download; venv pip.ini pins the mirror)" }
     else { $willSkip += "venv (already built)" }
-    if (-not $NoNode -and -not $out.HasRuntimeNode) { $mustInstall += "node runtime: PINNED $NodeVersion (~36 MB download, npmmirror, sha256-verified, OPTIONAL)" }
+    if (-not $NoNode -and -not $out.HasRuntimeNode) {
+        # v29: external reuse changes the conclusion BEFORE the old
+        # download line ever appears (the field complaint was exactly
+        # "I passed my node and it still said download").
+        if ($out.NodeExternalReuse) {
+            $willSkip += "node runtime: NO DOWNLOAD -- reusing $($out.NodeDecision.Exe) ($(if ($out.NodeDecision.Reason) { $out.NodeDecision.Reason } else { 'external node' }))"
+        } else {
+            $mustInstall += "node runtime: PINNED $NodeVersion (~36 MB download, npmmirror, sha256-verified, OPTIONAL)"
+        }
+    }
     elseif ($out.HasRuntimeNode) { $willSkip += "node runtime (already installed)" }
     if (-not $out.HasMarker) { $mustInstall += "app files + node_modules (~350 MB from source copy)" }
     else { $willSkip += "app files (marker present)" }
@@ -3296,7 +3541,8 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
     $estMB = 0
     if (-not $out.HasRuntimePython) { $estMB += 27 }
     if (-not $out.HasVenv) { $estMB += 150 }
-    if (-not $NoNode -and -not $out.HasRuntimeNode -and -not $NodeArchive) { $estMB += 36 }
+    # v29: an externally reused node means zero download bytes too.
+    if (-not $NoNode -and -not $out.HasRuntimeNode -and -not $NodeArchive -and -not $out.NodeExternalReuse) { $estMB += 36 }
     if (-not $out.HasMarker) { $estMB += 0 }   # app copy is local, not network
 
     if ($Offline) {
@@ -3317,7 +3563,10 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
                 elseif ($out.HasVenv) { $mustInstall += "venv + pip deps: existing venv reused (no pip run)" }
                 else { $mustInstall += "venv + pip deps: NO wheels available -- offline pip cannot run; a FIX FIRST blocker (copy wheels into <PackageDir>\wheels or pass -WheelDir)" }
             } elseif ($m -like "node runtime*") {
-                if ($NodeArchive) { $mustInstall += "node runtime: from -NodeArchive ($NodeArchive) -- NO network download" }
+                # v29: an externally reused node stays a reuse line
+                # offline too (no archive, no cache, no download).
+                if ($out.NodeExternalReuse) { $mustInstall += "node runtime: reusing the machine's node at $($out.NodeDecision.Exe) -- NO network download" }
+                elseif ($NodeArchive) { $mustInstall += "node runtime: from -NodeArchive ($NodeArchive) -- NO network download" }
                 elseif ($out.HasRuntimeNode) { $mustInstall += "node runtime: already laid -- reuse" }
                 else { $mustInstall += "node runtime: from the package dir cache if present + verified -- NO network download; otherwise node is SKIPPED (optional)" }
             } else {
@@ -4002,6 +4251,11 @@ function Invoke-AppBuild([string]$InstallDir, [string]$NodeExe) {
     # Node. npm registry / electron binary both pinned to npmmirror.
     # $NodeExe may be $null (NoNode / failed bootstrap): then try PATH
     # as a fallback; if that also has no node, we throw.
+    # v29 (t_c3d4e1f2): $NodeExe may also be an EXTERNAL reused node
+    # (-NodePath / discovery). Its dir is prepended to PATH the same
+    # way -- npm/npx resolve from it for THIS build process only --
+    # so "rebuild the UI / run tests later" paths (which shell out to
+    # npm on PATH) keep working after install.
     $nodeDir = $null
     if ($NodeExe -and (Test-Path -LiteralPath $NodeExe)) {
         $nodeDir = Split-Path -Parent $NodeExe
@@ -4011,6 +4265,7 @@ function Invoke-AppBuild([string]$InstallDir, [string]$NodeExe) {
 [install] build needs Node/npm but none is available.
 FIX (pick one):
   - re-run WITHOUT -NoNode so the installer bootstraps its own Node into <InstallDir>\runtime\node
+  - pass -NodePath <path to a working node.exe> to reuse the machine's own Node
   - lay node.exe yourself at <InstallDir>\runtime\node\node.exe and re-run
   - pass -SkipBuild (the installed app will NOT start until you build it manually)
 "@
@@ -5106,20 +5361,57 @@ for mod, label in (('PIL','Pillow'),('fitz','pymupdf'),('pypdf','pypdf'),
 # runtime. Node serves `npm start` fallback, UI rebuilds, and tests.
 # ---------------------------------------------------------------------------
 $nodeExe = $null
+# v29: which node will serve npm start fallback / rebuilds / tests?
+#   1. -NodePath (explicit reuse -- no download, no copy)
+#   2. pre-laid <InstallDir>\runtime\node (OLD behavior, kept first
+#      so existing self-contained installs never change)
+#   3. auto-discovered external node (PATH / common locations,
+#      major >= pinned major) -- same no-download reuse
+#   4. otherwise the OLD chain: -Offline skip / -NodeArchive /
+#      package-dir cache / download
+$nodeExternalReuse = $false
 if (-not $NoNode) {
     $nodeExe = Join-Path $InstallDir "runtime\node\node.exe"
     if (Test-Path -LiteralPath $nodeExe) {
         Write-Host "[install] node runtime present: $nodeExe"
-    } elseif ($Offline -and -not $NodeArchive) {
-        Write-Host "[install] -Offline without -NodeArchive: skipping node bootstrap"
     } else {
-        try {
-            Install-NodeRuntime $InstallDir | Out-Null
-        } catch {
-            Write-Warning "[install] node bootstrap FAILED (non-fatal -- the app itself does not need Node):"
-            Write-Warning "          $($_.Exception.Message)"
-            Write-Warning "          Node only serves 'npm start' fallback / UI rebuilds / tests. Install it later from https://nodejs.org if needed."
-            $nodeExe = $null
+        # v29: try EXPLICIT first, then auto-discovered external node.
+        # -NodePath with a bad path/version is a HARD error (Find-
+        # NodeExternal throws on a missing path; an old major or a
+        # broken exe is reported by the decision and refused here).
+        $nodeDec = Find-NodeExternal $NodePath
+        if ($nodeDec.Exe -and $NodePath -and ([string]$nodeDec.Exe) -eq ([string]$NodePath).ToLower()) {
+            # explicit path: report version + provenance, reuse it
+            $nodeVer = $null
+            foreach ($c in $nodeDec.Candidates) { if ($c.Selected) { $nodeVer = $c.Version } }
+            Write-Host "[install] -NodePath: reusing the machine's own node.exe (no download, no copy): $($nodeDec.Exe) ($nodeVer)"
+            $nodeExe = $nodeDec.Exe
+            $nodeExternalReuse = $true
+        } elseif ($nodeDec.Exe) {
+            # auto-discovered (no -NodePath given): reuse, and say so
+            Write-Host "[install] node decision: $($nodeDec.Reason)"
+            Write-Host "[install] reusing the machine's own node (no download, no copy): $($nodeDec.Exe)"
+            $nodeExe = $nodeDec.Exe
+            $nodeExternalReuse = $true
+        } elseif ($NodePath) {
+            # -NodePath given but rejected (too old / does not run):
+            # the user TYPED this path -- refuse loudly, never fall
+            # back to a download behind their back (field complaint).
+            $why = @($nodeDec.Candidates | Where-Object { $_.Exe -eq ([string]$NodePath).ToLower() } | Select-Object -First 1)
+            $whyText = "version or execution check failed"
+            if ($why -and $why.SkipReason) { $whyText = $why.SkipReason }
+            throw "[install] -NodePath points at a node.exe this install cannot use: $NodePath ($whyText). Give a node.exe with major >= $(Get-NodeMajor $NodeVersion) (pinned: $NodeVersion), or drop -NodePath to let the installer bootstrap its own runtime."
+        } elseif ($Offline -and -not $NodeArchive) {
+            Write-Host "[install] -Offline without -NodeArchive: skipping node bootstrap"
+        } else {
+            try {
+                Install-NodeRuntime $InstallDir | Out-Null
+            } catch {
+                Write-Warning "[install] node bootstrap FAILED (non-fatal -- the app itself does not need Node):"
+                Write-Warning "          $($_.Exception.Message)"
+                Write-Warning "          Node only serves 'npm start' fallback / UI rebuilds / tests. Install it later from https://nodejs.org if needed."
+                $nodeExe = $null
+            }
         }
     }
     # v19: -CacheDir bookkeeping for npm -- the .bat already pins the
@@ -5244,7 +5536,26 @@ Invoke-Step "writing launcher $bat" {
     # single-instance lock). Build the complete lines first instead.
     $pathSetup = ""
     if ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
-        $pathSetup = 'set "PATH=%~dp0runtime\node;%PATH%"'
+        # v29: three cases --
+        #  (a) internal runtime\node (old behavior, byte-identical):
+        #      prepend it, exactly as v2..v28 did;
+        #  (b) EXTERNAL reused node (-NodePath / discovery): no
+        #      PATH line at all -- the system PATH already resolves
+        #      node/npm, and a hard-coded external path in the .bat
+        #      would break the install the day that node is removed.
+        #      The BUILD (Invoke-AppBuild) still gets the external
+        #      dir prepended for its own process.
+        #  (c) a runtime\node that appears LATER (user re-runs the
+        #      installer, or lays it by hand): the if-exist guard
+        #      below picks it up -- internal always wins at launch.
+        $internalNode = Join-Path $InstallDir "runtime\node\node.exe"
+        if (-not $nodeExternalReuse -or (Test-Path -LiteralPath $internalNode)) {
+            $pathSetup = 'set "PATH=%~dp0runtime\node;%PATH%"'
+        } else {
+            # external reuse: still prefer a LATER-laid internal
+            # runtime at launch time, else fall back to system node.
+            $pathSetup = 'if exist "%~dp0runtime\node\node.exe" set "PATH=%~dp0runtime\node;%PATH%"'
+        }
     }
     # v24 (2026-10-13 real-machine fix; user: "can the agent start without
     # leaving a cmd window sitting in the background"):
