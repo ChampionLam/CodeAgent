@@ -169,7 +169,12 @@ class SelfHealEngine:
       - run_verifier(path, commands) -> (ok, log)  沙箱里跑命令（可替换桩）
       - lesson_sinks: list                写经验的 store（有 .record() 即可）
       - data_dir: str                     沙箱/历史/lessons 落盘根
-      - auto_apply: bool                  默认 False —— 红线一律不自动过
+      - auto_apply: bool                  默认 True —— 沙箱验证通过的补丁自动落地
+                                          （备份+回滚兜底）。注意：这**不是**红线开关——
+                                          红线 R1-R5 在 apply 之前由 redline_violation()
+                                          独立拦截，命中一律 stop，与本参数无关。
+                                          auto_apply=False 仅表示「补丁已验证但等用户
+                                          确认后才应用」，不代表红线安全。
     """
 
     def __init__(self, *, ask_model, workspace_root: str, run_verifier=None,
@@ -293,6 +298,8 @@ class SelfHealEngine:
                 return out
 
             # 4. 验证通过 → 应用到真实位置（先备份）
+            # auto_apply 只管「验证通过的补丁是否自动落盘」，红线已在上面第 2 步
+            # redline_violation() 拦截完毕（命中即 stop），与本分支无关。
             if not self.auto_apply:
                 out.stage = "skipped"
                 out.failure_reason = "auto_apply=False：补丁已验证，等用户确认后才应用"
@@ -536,11 +543,15 @@ class SelfHealEngine:
 
 def _default_verifier(file_path: str, commands: list) -> tuple[bool, str]:
     import subprocess
+
+    import procflags
     if not commands:
         # 无验证命令 → 只做语法检查（py 文件）
         if file_path.endswith(".py"):
             r = subprocess.run(["python", "-m", "py_compile", file_path],
-                               capture_output=True, text=True, timeout=VERIFY_TIMEOUT)
+                               capture_output=True, text=True,
+                               timeout=VERIFY_TIMEOUT,
+                               **procflags.no_window_kwargs())
             return r.returncode == 0, (r.stderr or r.stdout or "syntax OK")
         return True, "no verifier commands; patched file exists"
     cwd = os.path.dirname(file_path) or "."
@@ -549,7 +560,8 @@ def _default_verifier(file_path: str, commands: list) -> tuple[bool, str]:
         try:
             r = subprocess.run(["sh", "-c", cmd] if os.name != "nt" else ["cmd", "/c", cmd],
                                cwd=cwd, capture_output=True, text=True,
-                               timeout=VERIFY_TIMEOUT)
+                               timeout=VERIFY_TIMEOUT,
+                               **procflags.no_window_kwargs())
         except subprocess.TimeoutExpired:
             return False, "验证命令超时（%ds）：%s" % (VERIFY_TIMEOUT, cmd)
         logs.append("$ %s\n%s%s" % (cmd, r.stdout or "", r.stderr or ""))

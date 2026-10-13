@@ -504,12 +504,17 @@ def _pdf_page_texts_pdftotext(path: str) -> Optional[list]:
     import shutil as _shutil
     import subprocess
 
+    import procflags
+
     if _shutil.which("pdftotext") is None:
         return None
     try:
         proc = subprocess.run(
             ["pdftotext", path, "-"],
             capture_output=True, timeout=PDF_COVERAGE_SCAN_TIMEOUT,
+            # 短命一次性进程也要隐藏：self-heal/自动审批会在用户看得到
+            # 的桌面上跑这条路径，一次弹一个黑窗和常驻黑窗一样打扰。
+            **procflags.no_window_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return None

@@ -31,6 +31,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+import procflags
+
 DEFAULT_START_TIMEOUT = 10.0        # 启动+initialize 兜底秒数
 DEFAULT_CALL_TIMEOUT = 30.0         # 每次 tools/call 默认秒数
 MAX_AUTO_RESTARTS = 3               # 崩溃自动重启次数上限（超限标 dead）
@@ -188,6 +190,9 @@ class _StdioTransport:
         kwargs: dict = {}
         if is_win:
             kwargs["shell"] = True
+        # Windows 上不弹控制台黑窗（CREATE_NO_WINDOW 与 shell=True 不冲突：
+        # 仍走 cmd shim，只是不给它分配可见控制台；管道/编码不变）。
+        kwargs = procflags.merge_no_window(kwargs)
         try:
             self._proc = subprocess.Popen(
                 [self._cfg.command] + list(self._cfg.args),

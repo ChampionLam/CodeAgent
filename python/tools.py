@@ -22,6 +22,7 @@ import threading
 from dataclasses import dataclass, field
 
 import read_extract
+import procflags
 
 DEFAULT_SHELL_TIMEOUT = 60
 MAX_READ_BYTES = 4 * 1024 * 1024        # read_file 单次上限
@@ -731,7 +732,10 @@ class RunShellTool(Tool):
             proc = subprocess.run(
                 _wrap_shell_command(command), shell=True, cwd=cwd,
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", env=_shell_env(), timeout=timeout)
+                errors="replace", env=_shell_env(), timeout=timeout,
+                # Windows 上 shell=True 会起 cmd，不给它可见控制台即可
+                # 消掉黑窗；capture_output 管道照旧。非 Windows 空参数。
+                **procflags.no_window_kwargs())
         except subprocess.TimeoutExpired as exc:
             # 实测 3.11：text=True 下 exc.stdout/stderr 仍是 bytes（部分输出）
             out = _clip(_decode_partial(exc.stdout))
@@ -1370,6 +1374,75 @@ class DelegateTool(Tool):
         )
 
 
+# ── workspace（t_2d0783e3）──────────────────────────────────────────────────────
+# 改默认工作目录：config.json 的 capabilities.workspaceRoot 由 sidecar 落盘，
+# 本模块不认识 config 也不碰磁盘配置 —— 跟 delegator 一样走注入点，架构
+# 边界（不 import sidecar / 不做权限裁决）保持原样。
+_WORKSPACE_SETTER = None
+
+
+def set_workspace_setter(setter) -> None:
+    """挂上（或清空）sidecar 侧的落盘回调。未接线时 set_workspace 报不可用。"""
+    global _WORKSPACE_SETTER
+    _WORKSPACE_SETTER = setter
+
+
+def get_workspace_setter():
+    return _WORKSPACE_SETTER
+
+
+class SetWorkspaceTool(Tool):
+    """让 agent 在对话里改默认工作目录（sidecar 侧写 config.json）。"""
+
+    name = "set_workspace"
+    description = (
+        "Change the DEFAULT working directory (workspace root) for the whole "
+        "app, persisting it to config.json's capabilities.workspaceRoot. "
+        "Takes effect from the next chat round that does not pass an "
+        "explicit workspaceRoot, including new sessions (an explicit "
+        "request-level workspaceRoot still wins for that round). Use it "
+        "when the user asks to switch the working directory, e.g. 'move "
+        "the workspace to D:\\projects\\foo'. Only absolute paths are "
+        "accepted; the directory is created if missing."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": (
+                    "Absolute path of the new default workspace directory. "
+                    "Created if it does not exist."
+                ),
+            },
+        },
+        "required": ["path"],
+    }
+
+    def run(self, args: dict, *, workspace_root: str = "") -> ToolResult:
+        setter = get_workspace_setter()
+        if setter is None:
+            return _fail("WORKSPACE_SET_UNAVAILABLE",
+                         "set_workspace: config writer is not wired in this build")
+        path = args.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return _fail("BAD_REQUEST",
+                         "set_workspace: 'path' must be a non-empty string")
+        try:
+            new_root = setter(path.strip())
+        except Exception as exc:
+            return _fail("IO_ERROR", "set_workspace: %s" % exc)
+        return _ok(
+            "Workspace root changed to %s. It is persisted to config.json "
+            "and takes effect from the next chat round (an explicit "
+            "request-level workspaceRoot still wins for that round). "
+            "Tell the user in plain words, e.g. '工作目录已切到 %s'."
+            % (new_root, new_root),
+            workspaceRoot=new_root,
+            persisted=True,
+        )
+
+
 def register_defaults() -> None:
     """把基础工具注册进全局注册表（可重复调用，幂等覆盖）。"""
     for tool in (ReadFileTool(), ListDirTool(), SearchFilesTool(), WriteFileTool(),
@@ -1378,7 +1451,8 @@ def register_defaults() -> None:
                  SaveRuleTool(), RemoveRuleTool(),
                  SearchConversationsTool(),
                  DelegateTool(),
-                 SkillManageTool()):
+                 SkillManageTool(),
+                 SetWorkspaceTool()):
         register(tool)
 
 

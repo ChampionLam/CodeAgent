@@ -108,7 +108,7 @@ class TestRegistry(ToolsTestBase):
                                  "read_skill", "list_skills", "skill_manage",
                                  "save_rule", "remove_rule",
                                  "search_files", "edit_file", "delete_path",
-                                 "delegate"})
+                                 "set_workspace", "delegate"})
 
     def test_get_returns_instance_or_none(self) -> None:
         self.assertIsInstance(tools.get("read_file"), ReadFileTool)
@@ -131,7 +131,7 @@ class TestRegistry(ToolsTestBase):
 
     def test_schemas_shape(self) -> None:
         schemas = tools.schemas()
-        self.assertEqual(len(schemas), 14)  # base + skills + skill_manage + hard rules + file tools + history + delegate
+        self.assertEqual(len(schemas), 15)  # base + skills + skill_manage + hard rules + file tools + history + delegate + set_workspace
         for schema in schemas:
             self.assertEqual(schema["type"], "function")
             fn = schema["function"]
@@ -144,7 +144,7 @@ class TestRegistry(ToolsTestBase):
                                    "read_file", "list_dir", "write_file", "run_shell", "search_conversations",
                                    "read_skill", "list_skills", "skill_manage",
                                    "search_files", "edit_file", "delete_path",
-                                   "delegate"})
+                                   "set_workspace", "delegate"})
 
     def test_schemas_sorted_stable_after_reregister(self) -> None:
         tools._reset_for_tests()
@@ -167,7 +167,7 @@ class TestRegistry(ToolsTestBase):
     def test_list_tools_returns_copy(self) -> None:
         lst = tools.list_tools()
         lst.clear()
-        self.assertEqual(len(tools.list_tools()), 14)  # base + skills + skill_manage + hard rules + file tools + history + delegate
+        self.assertEqual(len(tools.list_tools()), 15)  # base + skills + skill_manage + hard rules + file tools + history + delegate + set_workspace
 
 
 class TestReadFile(ToolsTestBase):
