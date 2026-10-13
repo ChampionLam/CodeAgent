@@ -19,13 +19,23 @@ RSS 约 304MB，进程内加载等于永久吃掉 300MB+；子进程在空闲后
 可全部还给 OS，只付一次约 0.36s 冷启动。单条推理 p50 约 116ms
 （本机 i5 无 GPU），每命令一条的延迟可接受。
 
-**模型文件不入库、部署时投放**：这是公开仓，97.7MB 的 ONNX 不许进
+**模型文件不入库、部署时投放**：这是公开仓，100MB 级的 ONNX 不许进
 git。默认从 python/models/decision_bert/ 读（.gitignore 只忽略大体积
-模型产物 *.onnx / tokenizer.json / calibrator*.json，serve.py 与
-README.md 是可跟踪代码），路径可由 config.json 的 guard 段或环境变量
-DESK_GUARD_MODEL / DESK_GUARD_CALIBRATOR / DESK_GUARD_TOKENIZER 覆盖。
-校准器必须用 int8 专属的 calibrator_full_v4_int8.json —— 套 fp32 的
-那份不报错，只会让阈值静默失准（实测 level ECE 0.0470→0.0553）。
+模型产物 *.onnx / *.onnx.data / tokenizer.json / calibrator*.json，
+serve.py 与 README.md 是可跟踪代码），路径可由 config.json 的 guard
+段或环境变量 DESK_GUARD_MODEL / DESK_GUARD_CALIBRATOR /
+DESK_GUARD_TOKENIZER 覆盖。
+
+版本（2026-10-13 切换）：当前分发/加载的是 **v6 fp16**（2026-10-02
+训练，Windows 命令语料，词表扩到 22,765 行）。fp16 模型是 ONNX
+外部数据格式：decision_bert.onnx（321,505 字节）+
+decision_bert.onnx.data（205,880,832 字节，**必须同目录、都不能
+改名**）。校准器用与 fp16 成对的 calibrator.json —— 套 int8 那份
+（calibrator_full_v6_int8.json）不报错，只会让阈值静默失准。
+词表断言：serve.py 启动时会校验 tokenizer 词表行数 == 模型
+embedding 行数，不一致直接报错拒绝起（fail loud，防 v4 旧词表
+静默错位 —— 实测 fp16 配 21,128 词表 ls -la 的 p 从 0.013 漂到
+0.134，方向不定）。
 
 本模块不 import onnxruntime —— 那些重依赖全在子进程脚本
 python/models/decision_bert/serve.py 里，宿主进程保持轻启动。
@@ -41,6 +51,7 @@ import threading
 import time
 
 import guard_model_proc
+import procflags
 from guard_model_proc import (
     IDLE_THRESHOLD_SECONDS,
     GuardModelProcess,
@@ -241,6 +252,11 @@ class GuardModel:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
                 errors="replace", bufsize=1,
+                # Windows 上不弹控制台黑窗（用户可见的两个 cmd 窗就是它）；
+                # CREATE_NO_WINDOW 不改进程组/杀树语义，kill() 仍按原路
+                # reap（见 ChildProcess.kill 的注释）。非 Windows 返回空
+                # dict，行为零变化。
+                **procflags.no_window_kwargs(),
             )
         except OSError as exc:
             self._refusal = "could not spawn guard model server: %s" % (exc,)
@@ -364,6 +380,9 @@ class GuardModel:
             self._mark_degradation("unavailable",
                                    "guard model server rejected request: %s"
                                    % (reply.get("error") or reply,))
+            # 起不来属于配置问题（模型/校准器/词表不匹配、依赖缺失），
+            # 重试也不会好 —— 标记 unavailable 让生命周期不再空转。
+            self._proc.shutdown()
             return None
         try:
             out = {
@@ -420,17 +439,22 @@ def _make_text(tool: str, cwd: str, command: str) -> str:
 
 # ---------------------------------------------------------------- paths
 def default_model_path() -> str:
-    """模型 ONNX 默认位置（仓库内 gitignore 目录，部署时投放）。"""
+    """模型 ONNX 默认位置（仓库内 gitignore 目录，部署时投放）。
+
+    v6 fp16：decision_bert.onnx 是外部数据格式，真正的权重在旁边的
+    decision_bert.onnx.data（同目录、不改名）。这里只返回 .onnx 的
+    路径；.data 文件缺失时 serve.py 加载会报 load failed。
+    """
     return os.environ.get("DESK_GUARD_MODEL") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "models", "decision_bert", "decision_bert_v4_int8.onnx")
+        "models", "decision_bert", "decision_bert.onnx")
 
 
 def default_calibrator_path() -> str:
-    """int8 专属校准器（绝不能配 fp32 的那份）。"""
+    """与 fp16 成对的校准器（套 int8 那份会静默失准，见模块头）。"""
     return os.environ.get("DESK_GUARD_CALIBRATOR") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "models", "decision_bert", "calibrator_full_v4_int8.json")
+        "models", "decision_bert", "calibrator.json")
 
 
 def default_tokenizer_path() -> str:

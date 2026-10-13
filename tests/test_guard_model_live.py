@@ -1,11 +1,14 @@
-"""guard 第二层（DecisionBert int8）真实子进程端到端：本机实测用。
+"""guard 第二层（DecisionBert fp16）真实子进程端到端：本机实测用。
 
-模型产物在盘（python/models/decision_bert/*.onnx 等）才收集 —— CI /
-没投放模型的机器上自动跳过，不红。这里跑的是真实 onnxruntime 子进程
-+ 真实 ONNX + int8 校准器，验证：
+模型产物在盘（python/models/decision_bert/decision_bert.onnx 等）才
+收集 —— CI / 没投放模型的机器上自动跳过，不红。这里跑的是真实
+onnxruntime 子进程 + 真实 fp16 ONNX + 配对校准器，验证：
   * 子进程能起、能回校准后的 p；
   * 正则命中不调模型（子进程计数不涨）；
-  * fail-open：路径指错 → predict 返回 None、guard 照常判定。
+  * fail-open：路径指错 → predict 返回 None、guard 照常判定；
+  * 词表一致性 fail-loud（2026-10-13 v6 fp16 起强制）：tokenizer 词表
+    行数 != 模型 embedding 行数 → serve.py 拒绝起，predict 返回 None
+    且 warn 日志写明 mismatch —— 不许静默错位跑。
 """
 from __future__ import annotations
 
@@ -20,10 +23,13 @@ import guard  # noqa: E402
 import guard_model  # noqa: E402
 import subprocess  # noqa: E402
 import json  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
 
 _MODEL = guard_model.default_model_path()
 _HAVE_MODEL = all(os.path.isfile(p) for p in (
-    _MODEL, guard_model.default_calibrator_path(),
+    _MODEL, _MODEL + ".data",
+    guard_model.default_calibrator_path(),
     guard_model.default_tokenizer_path()))
 
 
@@ -91,6 +97,20 @@ class LiveSubprocessTests(unittest.TestCase):
         # ls -la 这类日常命令不该是高危：校准后 p 应低于 ask 档
         self.assertLess(out["p"], 0.35)
 
+    def test_v6_fp16_delivery_baseline(self):
+        """交付包基线（2026-10-13 fp16 拍板）：ls -la ≈ 0.013、
+        rm -rf / ≈ 0.977。钉住「模型/校准器/tokenizer 成套投放」——
+        任何一件换错版本，这两个数立刻漂。
+        """
+        safe = self.model.predict("ls -la")
+        self.assertIsNotNone(safe)
+        self.assertAlmostEqual(safe["p"], 0.013, delta=0.02,
+                               msg="ls -la 基线漂移：模型三件套不成套？")
+        danger = self.model.predict("rm -rf /")
+        self.assertIsNotNone(danger)
+        self.assertAlmostEqual(danger["p"], 0.977, delta=0.02,
+                               msg="rm -rf / 基线漂移：模型三件套不成套？")
+
     def test_stream_alignment_matches_direct_serve(self):
         """desync 回归测试（2026-10-01 修复的正主）。
 
@@ -154,6 +174,60 @@ class LiveSubprocessTests(unittest.TestCase):
         child = self.model._proc._child
         self.assertNotEqual(getattr(getattr(child, "_proc", None), "pid", None),
                             os.getpid(), "模型必须在子进程里跑")
+
+
+@unittest.skipUnless(_HAVE_MODEL, "model artifacts not deployed")
+class VocabMismatchFailLoudTests(unittest.TestCase):
+    """词表一致性 fail-loud 回归（2026-10-13，v6 fp16 起强制）。
+
+    坑：v6 模型词表扩到 22,765 行，配 v4 旧 tokenizer（21,128）ORT
+    **不报错**（越界只在 id >= 22,765 才触发），p 静默漂移（实测
+    ls -la 0.013 → 0.134）。serve.py 因此在启动时断言词表行数 ==
+    embedding 行数，不一致拒绝起。本测试用截短词表的人为错配
+    验证真的触发：predict → None + degradation_reason="unavailable"
+    + 日志带 "vocab mismatch"。
+    """
+
+    def test_mismatched_tokenizer_fails_loudly(self):
+        import json as _json
+
+        # 造一个词表行数不同的 tokenizer：截掉 vocab 里最后一个
+        # token（21128 行 != 22765 行，等价于投放了 v4 旧件）。
+        with open(guard_model.default_tokenizer_path(),
+                  encoding="utf-8") as f:
+            tok = _json.load(f)
+        vocab = tok["model"]["vocab"]
+        last = max(vocab.values())
+        del vocab[[k for k, v in vocab.items() if v == last][0]]
+
+        tmp = tempfile.mkdtemp(prefix="guard_vocab_mismatch_")
+        bad_tok = os.path.join(tmp, "tokenizer.json")
+        try:
+            with open(bad_tok, "w", encoding="utf-8") as f:
+                _json.dump(tok, f)
+
+            lines = []
+            old_hook = guard_model._LOG_HOOK
+            guard_model.set_log_hook(
+                lambda level, msg: lines.append((level, msg)))
+            m = None
+            try:
+                m = guard_model.GuardModel(
+                    model_path=_MODEL,
+                    calibrator_path=guard_model.default_calibrator_path(),
+                    tokenizer_path=bad_tok)
+                out = m.predict("ls -la")
+                self.assertIsNone(out, "词表错配必须拒绝出结果")
+                self.assertEqual(m.degradation_reason, "unavailable")
+                self.assertTrue(
+                    any("vocab mismatch" in msg for _, msg in lines),
+                    "日志必须写明 mismatch 原因：%r" % (lines,))
+            finally:
+                guard_model.set_log_hook(old_hook)
+                if m is not None:
+                    m.shutdown()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 @unittest.skipUnless(_HAVE_MODEL, "model artifacts not deployed")

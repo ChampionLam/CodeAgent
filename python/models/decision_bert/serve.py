@@ -18,16 +18,45 @@ RSS ~304MB，reap 一次全部还给 OS；单条推理 p50 ~116ms，比进程冷
   * ONNX 三个输出都是 logit：noul[1] / level[1,4] / cost[1,3]
   * 校准顺序不能反：先 logit / T[head] 再激活 —— noul 用 sigmoid，
     level/cost 用 softmax；level/cost 只做展示，不参与自动决策
-  * 校准器必须用 int8 专属 calibrator_full_v4_int8.json（配 fp32 那份
-    阈值会静默失准：level ECE 0.0470→0.0553）
+  * 校准器必须与精度成对：fp16 用 calibrator.json（与 fp32 共用那份
+    温度）；int8 必须单独拟合，套 fp32/fp16 的温度会静默失准
+  * 词表一致性（2026-10-13，v6 fp16 起强制）：tokenizer 词表行数必须
+    == 模型 embedding 行数，不一致直接 load failed、拒绝起 ——
+    fail loud。防的就是「模型扩了词表、分词器还是旧版」的静默错位：
+    fp16（22,765 行）配 v4 旧词表（21,128）不报错，但 ls -la 的
+    p 实测从 0.013 漂到 0.134；方向还不定，日志里看不出来。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 
 MAX_LENGTH = 128
+
+
+def _embedding_rows(sess, np) -> int:
+    """探测模型词表行数（embedding 行数）。
+
+    不引入 onnx 包（新依赖零容忍）：用必然越界的 token id 触发
+    Gather 越界错误，ORT 的错误信息自带边界
+    （“idx=... must be within the inclusive range [-V,V-1]”），
+    解析出 V。探测用的索引必须 > 2^31 之外的安全大数（1<<30）。
+    探测失败（ORT 换了错误文案等）按行数未知处理，由调用方
+    fail loud —— 宁可拒绝起，不可静默降级跑。
+    """
+    big = 1 << 30
+    try:
+        sess.run(["noul", "level", "cost"], {
+            "input_ids": np.asarray([[big]], dtype=np.int64),
+            "attention_mask": np.asarray([[1]], dtype=np.int64)})
+    except Exception as exc:
+        m = re.search(r"inclusive range \[-(\d+),(\d+)\]", str(exc))
+        if m:
+            return int(m.group(2)) + 1
+    raise RuntimeError("cannot determine embedding rows (probe failed)")
+
 
 
 def _load_calibrator(path: str) -> dict:
@@ -69,11 +98,23 @@ def main() -> int:
             args.model, providers=["CPUExecutionProvider"])
         tok = Tokenizer.from_file(args.tokenizer)
         temps = _load_calibrator(args.calibrator)
+        # 词表一致性断言（fail loud，见模块头）。
+        rows = _embedding_rows(sess, np)
+        vocab = tok.get_vocab_size()
+        if rows != vocab:
+            raise RuntimeError(
+                "vocab mismatch: tokenizer has %d tokens but model "
+                "embedding has %d rows -- model/tokenizer are NOT a "
+                "matched set (e.g. v6 22,765-row model paired with the "
+                "old 21,128-row tokenizer). This errors loudly by design: "
+                "the mismatch would otherwise only silently skew p."
+                % (vocab, rows))
     except Exception as exc:
+        _load_error = "load failed: %s" % (exc,)
         print(json.dumps({"ok": False,
-                          "error": "load failed: %s" % (exc,)}), flush=True)
+                          "error": _load_error}), flush=True)
         for line in sys.stdin:
-            print(json.dumps({"ok": False, "error": "load failed"}), flush=True)
+            print(json.dumps({"ok": False, "error": _load_error}), flush=True)
         return 0
 
     # 预热一条，把首条推理的延迟从冷启动里剥出来（arena / 线程池就绪）。
