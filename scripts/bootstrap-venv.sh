@@ -53,6 +53,22 @@ else
   fi
 fi
 
+# Memory engine layer (mnemosyne-memory) is OPTIONAL: a failed install
+# only warns and continues -- the sidecar probes find_spec("mnemosyne")
+# and disables memory hooks when absent; the app always runs. The
+# embedding model is NOT fetched here (lazy first-use via HF_ENDPOINT).
+MEMORY_REQ="$ROOT/python/requirements-memory.txt"
+if [ ! -f "$MEMORY_REQ" ]; then
+  echo "[bootstrap] warn: optional memory-engine requirements missing: $MEMORY_REQ (skipped)" >&2
+else
+  echo "[bootstrap] installing (optional) requirements-memory.txt"
+  if ! "$PY" -m pip install -r "$MEMORY_REQ"; then
+    echo "[bootstrap] warn: requirements-memory.txt install failed -- memory features unavailable (sidecar memory hooks stay disabled); bootstrap continues" >&2
+  else
+    echo "[bootstrap] memory engine installed (mnemosyne-memory; embedding model fetched lazily on first use)"
+  fi
+fi
+
 echo "[bootstrap] self-check"
 "$PY" - <<'PYEOF'
 import sys

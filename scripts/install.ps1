@@ -628,6 +628,73 @@
 #        main.ts reads config.json capabilities.workspaceRoot as the
 #        default workspaceRoot for chat/hub/info instead of the
 #        hardcoded <userData>\workspace.
+#
+#   - v27 (t_8ce86a47): MEMORY ENGINE (mnemosyne) as an optional-but-
+#     default pip layer. New python\requirements-memory.txt pins
+#     mnemosyne-memory[mcp,embeddings]>=3.15.1; installed like the
+#     guard layer (mirror first, PyPI fallback, fail-soft WARNING --
+#     never aborts the install). Failure means "memory unavailable",
+#     the sidecar's hooks stay disabled exactly as today (find_spec
+#     returns None) -- the app must run WITHOUT the memory engine.
+#     The embedding model (Qdrant/bge-small-zh-v1.5, ~91 MB) is NOT
+#     downloaded by the installer: it is lazily fetched by fastembed
+#     on first use, via the app-injected HF_ENDPOINT mirror. The
+#     installer only VERIFIES package presence (import probe +
+#     subprocess env assertion) and prints a one-line summary
+#     "memory engine: installed/not installed(reason)".
+#   - v28 (task t_eea5a4ac, 2026-10-13). GUARD MODEL DOWNLOAD FROM
+#     MODELSCOPE (user decision 2026-10-13: "CodeAgent adds a step
+#     fetching the model from ModelScope"). The guardian model files
+#     (python\models\decision_bert\) are gitignored deploy artifacts
+#     that used to require manual placement; a clean-clone install
+#     silently ran the guard as regex-only ("model layer degraded ...
+#     model file not found"). Fixes:
+#     a) NEW STAGE Install-GuardModel (step 2c-bis): pulls the 4
+#        files (fp16 delivery, see note g) from the ModelScope
+#        FILE-DIRECT API
+#        https://modelscope.cn/api/v1/models/<owner>/<repo>/repo?Revision=master&FilePath=<f>
+#        using the installer's own Invoke-WebRequest. NO modelscope
+#        SDK dependency -- the installer must not grow one for this.
+#     b) sha256 VERIFICATION per file. Expected-hash sources, in
+#        priority order: a SHA256SUMS file sitting in the local model
+#        dir (repo-shipped or user-placed) > the ModelScope repo's own
+#        SHA256SUMS (parsed lines "<hash>  <filename>") > the BUILT-IN
+#        constant table (task-t_eea5a4ac values; byte sizes are a
+#        fast pre-check). On mismatch the downloaded file is DELETED
+#        and retried once; still bad -> give up on that file. A local
+#        file with NO available expected hash is left untouched and
+#        reported as "unverified" (never deleted -- it may be a
+#        deliberately hand-placed newer build).
+#     c) FAIL-SOFT ONLY: the guard itself is fail-open, so a missing
+#        model NEVER fails the install -- it prints a WARNING naming
+#        the degraded state ("guard model layer degraded to pure
+#        regex"), a copy-paste-able one-line curl per missing file
+#        (self-heal), and the manual alternative (drop the files into
+#        python\models\decision_bert and re-run the installer -- a
+#        verified local file is never re-downloaded).
+#     d) -Offline / -SkipModelDownload skip the network entirely
+#        (local files are still checked and reported).
+#     e) IDEMPOTENT / UPGRADE-SAFE: an existing file whose sha256
+#        already matches the expected hash is never re-downloaded;
+#        replacement only ever touches the managed model files, never
+#        repo code in the dir (serve.py, README.md) and never user data.
+#     g) PRECISION NOTE (corrected twice mid-task, final 2026-10-13):
+#        the delivery is FP16, not int8 (v4 table was task-provided,
+#        v6 note was superseded; evidence: the model-training side's
+#        delivery README, 2026-10-02).
+#        decision_bert.onnx + decision_bert.onnx.data are ONNX
+#        external-data format (same dir, neither renamable) -- BOTH
+#        are managed and verified; a .onnx without its .data would
+#        load a broken model. The .data (196.3 MiB) exceeds GitHub's
+#        100 MiB single-file limit, so ModelScope is the ONLY channel
+#        for the guard model. The tokenizer (22,765-row vocab) must
+#        stay paired with the fp16 set -- mismatched vocab does not
+#        error, it silently loses points, hence tokenizer.json IS
+#        sha256-pinned built-in too.
+#     f) Credential-sweep note: tokenizer.json / *.onnx /
+#        calibrator*.json are on the v23 model-artifact exemption
+#        list (t_d37fca26); the downloaded files add no sweep risk --
+#        and the sweep must never treat the model tree as a leak.
 param(
     [string]$InstallDir = "",
     # v7: unified package/archive directory. Defaults to
@@ -729,6 +796,15 @@ param(
     # artifact is a HARD error. -SkipBuild / -Offline keep the old
     # behavior but say plainly that the installed app will not start.
     [switch]$SkipBuild,
+    # v28 (t_eea5a4ac): guard model source on ModelScope (owner/repo).
+    # The default namespace is a PLACEHOLDER the user will replace
+    # with their real ModelScope namespace after uploading the repo;
+    # -ModelScopeRepo "" disables the stage entirely.
+    [string]$ModelScopeRepo = "ChampionLam/commands-guard-fp16",
+    # v28 (t_eea5a4ac): skip the guard-model network download (local
+    # files are still sha256-checked and reported). Implied by
+    # -Offline.
+    [switch]$SkipModelDownload,
     [switch]$IgnoreRegistryState
 )
 
@@ -981,6 +1057,255 @@ function Save-DownloadFile([string]$Url, [string]$Out) {
     [Net.ServicePointManager]::SecurityProtocol = `
         [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
     Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Out
+}
+
+# ---------------------------------------------------------------------------
+# v28 (t_eea5a4ac): guard model (decision_bert fp16) from ModelScope.
+# File-DIRECT API, NO modelscope SDK. Contract: download -> sha256
+# verify -> mismatch deletes + retries once -> still bad gives up on
+# that file. NEVER throws: the guard layer is fail-open (missing model
+# = regex-only guard), so this stage only WARNS, prints self-heal
+# curl lines, and reports status through $Script:GuardModel* for the
+# completion report.
+# ---------------------------------------------------------------------------
+$Script:GuardModelDir = $null       # resolved model dir
+$Script:GuardModelOk = 0            # files present + verified
+$Script:GuardModelMissing = @()     # filenames absent/failed
+$Script:GuardModelUnverified = @()  # present but no expected hash
+
+# Built-in expectation table (v28, CORRECTED TWICE per user notes:
+# 1st v4->v6, 2nd (final, 2026-10-13): the distribution is FP16, not
+# int8 -- evidence: the model-training side's delivery README
+# (2026-10-02, field-tested on 1963 Windows commands: miss 10.16% /
+# over-block 26.98% / acc 80.58% / p50 86.3ms / cold start 1.63s).
+# CONSTRAINTS baked in below:
+#   - decision_bert.onnx + decision_bert.onnx.data are ONNX EXTERNAL
+#     DATA format: same dir, neither may be renamed; BOTH are managed
+#     (pulling/verifying only the .onnx and missing .data would load
+#     a broken model).
+#   - the .data file is 196.3 MiB > GitHub's 100 MiB hard line, so
+#     ModelScope (or Releases) is the ONLY channel -- never the repo.
+#   - tokenizer.json is the v6 22,765-row vocab; pairing it with the
+#     old 21,128 vocab does not error, only silently loses points --
+#     files must stay a matched set (hence tokenizer IS pinned).
+#   - no optional vocab.txt in the fp16 delivery.
+$Script:GuardModelFiles = @(
+    @{ Name = "decision_bert.onnx";        Bytes = [long]321505;    Sha256 = "0757d5bec4321c8c13a42c0afef9c1b47c0ef2e78b564791ff3196b81864a89b"; Required = $true }
+    @{ Name = "decision_bert.onnx.data";   Bytes = [long]205880832; Sha256 = "ed14e73b19adeaff711f1d3a20bffa2a681546bc1ef6e1c7ff34d61a645cc629"; Required = $true }
+    @{ Name = "calibrator.json";           Bytes = [long]1113;      Sha256 = "9809736bfde493c557837f5ec13142acba03d9a8b80ec9464fa787b60367597c"; Required = $true }
+    @{ Name = "tokenizer.json";            Bytes = [long]736019;    Sha256 = "015d0ec928f26e28530d6c9399bdfd727ca39c04d34bc1b6a8ab10662a5208d7"; Required = $true }
+)
+$Script:ModelScopeBase = "https://modelscope.cn/api/v1/models"
+
+# Parse a SHA256SUMS text ("<hash>  <filename>" or "<hash> <filename>")
+# into a hashtable filename -> lowercase hash. Tolerant: ignores blank
+# lines, ./-prefixed names, comment lines, and lines that do not parse.
+function Get-Sha256SumsMap([string]$Text) {
+    $map = @{}
+    foreach ($line in @($Text -split "`r?`n")) {
+        $t = $line.Trim()
+        if (-not $t) { continue }
+        if ($t -match '^([0-9a-fA-F]{64})\s+\*?(?:\./)?([^*\s]+)$') {
+            $map[$Matches[2]] = $Matches[1].ToLower()
+        }
+    }
+    return $map
+}
+
+# Fetch a small text file (SHA256SUMS) from ModelScope; $null on any
+# failure. Uses the same TLS hygiene as Save-DownloadFile.
+function Get-ModelScopeText([string]$Url) {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = `
+            [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
+        # ModelScope serves the file API through a redirect chain;
+        # MaximumRedirection keeps PS 5.1's default behavior.
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 60
+        if ($resp.StatusCode -ne 200) { return $null }
+        return "$($resp.Content)"
+    } catch {
+        return $null
+    }
+}
+
+# The guard-model stage. $ModelDir is the ABSOLUTE target dir
+# (<InstallDir>\python\models\decision_bert). Network on/off comes
+# from the caller ($Offline / -SkipModelDownload / -ModelScopeRepo
+# empty). Repo code (serve.py, README.md) in the dir is never touched.
+function Install-GuardModel([string]$ModelDir, [bool]$AllowNetwork) {
+    $Script:GuardModelDir = $ModelDir
+    $owner = ""
+    $repo = ""
+    if ($ModelScopeRepo -and ($ModelScopeRepo -match '^([^/\s]+)/([^/\s]+)$')) {
+        $owner = $Matches[1]; $repo = $Matches[2]
+    } elseif ($ModelScopeRepo) {
+        Write-Warning "[install] -ModelScopeRepo '$ModelScopeRepo' is not owner/repo -- guard model download disabled (local files still checked)"
+    }
+    if (-not (Test-Path -LiteralPath $ModelDir)) {
+        New-Item -ItemType Directory -Path $ModelDir -Force | Out-Null
+    }
+
+    # --- expected-hash sources, in priority order ---
+    # 1) local SHA256SUMS in the model dir (repo-shipped or user-placed)
+    $localSums = @{}
+    $localSumsPath = Join-Path $ModelDir "SHA256SUMS"
+    if (Test-Path -LiteralPath $localSumsPath) {
+        $localSums = Get-Sha256SumsMap ([IO.File]::ReadAllText($localSumsPath))
+        if ($localSums.Count -gt 0) {
+            Write-Host "[install] guard model: using local SHA256SUMS ($($localSums.Count) entries) at $localSumsPath"
+        }
+    }
+    # 2) the ModelScope repo's own SHA256SUMS (only when we have a
+    #    valid repo and network is allowed)
+    $remoteSums = @{}
+    if ($AllowNetwork -and $owner -and -not $localSums.Count) {
+        $sumsUrl = "$Script:ModelScopeBase/$owner/$repo/repo?Revision=master&FilePath=SHA256SUMS"
+        $txt = Get-ModelScopeText $sumsUrl
+        if ($txt) {
+            $remoteSums = Get-Sha256SumsMap $txt
+            if ($remoteSums.Count -gt 0) {
+                Write-Host "[install] guard model: using ModelScope repo SHA256SUMS ($($remoteSums.Count) entries)"
+            }
+        }
+    }
+    # 3) built-in constant table
+    $builtinSums = @{}
+    foreach ($f in $Script:GuardModelFiles) { $builtinSums[$f.Name] = $f.Sha256 }
+
+    # Decide the expected hash for each managed file. $want may be
+    # $null (tokenizer/vocab without any SHA256SUMS source): then
+    # size match is the only check and the file is reported
+    # UNVERIFIED, never failed.
+    $expected = @{}
+    foreach ($f in $Script:GuardModelFiles) {
+        $h = $null
+        if ($localSums.ContainsKey($f.Name))      { $h = $localSums[$f.Name] }
+        elseif ($remoteSums.ContainsKey($f.Name)) { $h = $remoteSums[$f.Name] }
+        else                                      { $h = $f.Sha256 }
+        if (-not $h) {
+            if ($remoteSums.Count -gt 0 -or $localSums.Count -gt 0) {
+                Write-Warning "[install] guard model: no sha256 for $($f.Name) in any SHA256SUMS source and not pinned built-in -- it will only be size-checked (unverified)"
+            }
+        }
+        $expected[$f.Name] = $h
+    }
+
+    $failed = @()
+    $optionalAbsent = @()
+    foreach ($f in $Script:GuardModelFiles) {
+        $name = $f.Name
+        $required = if ($null -ne $f.Required) { [bool]$f.Required } else { $true }
+        $dst = Join-Path $ModelDir $name
+        $want = $expected[$name]
+        # ---- local file already present? ----
+        if (Test-Path -LiteralPath $dst) {
+            $sizeOk = ((Get-Item -LiteralPath $dst).Length -eq $f.Bytes)
+            if ($sizeOk -and $want) {
+                $actual = Get-FileSha256 $dst
+                if ($actual -eq $want) {
+                    Write-Host "[install] guard model: $name OK (present, sha256 verified)"
+                    $Script:GuardModelOk++
+                    continue
+                }
+            }
+            if ($sizeOk -and (-not $want)) {
+                # no expected hash available anywhere: size-matched only.
+                # LEFT AS-IS (may be a hand-placed newer build).
+                Write-Warning "[install] guard model: $name present, size matches, but NO expected sha256 available -- left as-is, reported unverified"
+                $Script:GuardModelUnverified += $name
+                continue
+            }
+            # present but wrong size / wrong hash: network re-download
+            # replaces it; offline keeps the file and warns.
+            if (-not $AllowNetwork) {
+                Write-Warning "[install] guard model: $name present but FAILED size/sha256 check and network is off -- kept as-is; delete the file and re-run online, or replace it manually"
+                if ($required) { $failed += $name } else { $Script:GuardModelUnverified += $name }
+                continue
+            }
+        } else {
+            # absent
+            if (-not $required) {
+                # vocab.txt: optional debug aid -- absent is a note, not a
+                # failure; still download it when we can.
+                if (-not $AllowNetwork -or -not $owner) { $optionalAbsent += $name; continue }
+            } elseif (-not $AllowNetwork -or -not $owner) {
+                $failed += $name
+                continue
+            }
+        }
+        # ---- download (one initial try + one retry on mismatch) ----
+        if (-not $AllowNetwork -or -not $owner) {
+            if ($required) { $failed += $name } else { $optionalAbsent += $name }
+            continue
+        }
+        $dlUrl = "$Script:ModelScopeBase/$owner/$repo/repo?Revision=master&FilePath=$([uri]::EscapeDataString($name))"
+        $ok = $false
+        $unverifiedDl = $false
+        foreach ($attempt in 1..2) {
+            $tmp = "$dst.download"
+            try {
+                if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+                Write-Host "[install] guard model: downloading $name (attempt $attempt of 2) from $dlUrl"
+                Save-DownloadFile $dlUrl $tmp
+                # size pre-check: HTML error pages are off by orders of
+                # magnitude; an exact byte match is the required state.
+                $gotBytes = (Get-Item -LiteralPath $tmp).Length
+                if ($gotBytes -ne $f.Bytes) {
+                    Write-Warning "[install] guard model: $name size mismatch (expected $($f.Bytes), got $gotBytes) -- HTML error page? deleting and retrying"
+                    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                    continue
+                }
+                if ($want) {
+                    $actual = Get-FileSha256 $tmp
+                    if ($actual -ne $want) {
+                        Write-Warning "[install] guard model: $name sha256 mismatch (expected $want, got $actual) -- deleting and retrying"
+                        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                        continue
+                    }
+                    Write-Host "[install] guard model: $name downloaded, sha256 OK ($actual)"
+                } else {
+                    $unverifiedDl = $true
+                    Write-Warning "[install] guard model: $name downloaded, size OK, but NO expected sha256 -- installed as UNVERIFIED (repo SHA256SUMS is the authority; this warning disappears once the repo ships one)"
+                }
+                # verified (or size-only) -> move into place (replaces any
+                # bad old file)
+                Move-Item -LiteralPath $tmp -Destination $dst -Force
+                $ok = $true
+                break
+            } catch {
+                Write-Warning "[install] guard model: download of $name failed ($($_.Exception.Message))"
+                if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        if ($ok) {
+            if ($unverifiedDl) { $Script:GuardModelUnverified += $name } else { $Script:GuardModelOk++ }
+        } else {
+            if ($required) { $failed += $name } else { $optionalAbsent += $name }
+        }
+    }
+    $Script:GuardModelMissing = @($failed | Select-Object -Unique)
+
+    # ---- fail-soft verdict + self-heal instructions ----
+    if ($Script:GuardModelMissing.Count -eq 0) {
+        Write-Host "[install] guard model: all required files present ($($Script:GuardModelOk) verified, $($Script:GuardModelUnverified.Count) unverified, $($optionalAbsent.Count) optional absent)"
+    } else {
+        Write-Warning ("[install] guard model: {0} required file(s) missing/invalid ({1}) -- guard model layer DEGRADED to pure-regex judgment; the app still runs (fail-open)" -f $Script:GuardModelMissing.Count, ($Script:GuardModelMissing -join ", "))
+        Write-Host  "[install] self-heal (run these, then re-run the installer -- verified local files are never re-downloaded):"
+        if ($owner) {
+            foreach ($n in $Script:GuardModelMissing) {
+                Write-Host "  curl -L -o `"$ModelDir\$n`" `"$Script:ModelScopeBase/$owner/$repo/repo?Revision=master&FilePath=$n`""
+            }
+            Write-Host "  or: manually copy the files into $ModelDir and re-run this installer (sha256 will be re-checked)"
+        } else {
+            Write-Host "  (no -ModelScopeRepo configured: manually place $($Script:GuardModelMissing -join ', ') into $ModelDir and re-run)"
+        }
+    }
+    if ($optionalAbsent.Count -gt 0) {
+        Write-Host "[install] guard model: optional debug file(s) absent (not an error): $(($optionalAbsent | Select-Object -Unique) -join ', ')"
+    }
+    if ($Script:GuardModelUnverified.Count -gt 0) {
+        Write-Warning ("[install] guard model: {0} file(s) present but UNVERIFIED (no expected sha256): {1} -- a repo SHA256SUMS removes this warning" -f $Script:GuardModelUnverified.Count, ($Script:GuardModelUnverified -join ", "))
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1425,8 +1750,8 @@ function Get-RegisteredPythonInstall([string]$Version) {
 # handing us a self-contained archive means "install THIS, here" --
 # the previous REUSE-first priority produced installs whose venv
 # silently depended on a foreign directory (field: stageE offline
-# install reused D:\ca-v3-d, so D:\ca-v3-e\runtime\python never
-# existed and the venv died when ca-v3-d was deleted days later).
+# install reused the earlier test dir, so a second runtime\python never
+# existed and the venv died when that first dir was deleted days later).
 # NOTE: a .exe archive is only "verified" here AFTER
 # Install-PythonRuntime's Authenticode/size checks -- for the reuse
 # gate we treat an existing + readable .exe as archive-intent (the
@@ -2186,12 +2511,16 @@ function Assert-CopySanity($Expected, $Actual, [string]$Where) {
     if ($Expected.Bytes -gt 0) { $ratioBytes = [double]$Actual.Bytes / [double]$Expected.Bytes }
     $ratioFiles = 0
     if ($Expected.Files -gt 0) { $ratioFiles = [double]$Actual.Files / [double]$Expected.Files }
-    if ($ratioBytes -gt 1.5 -or $ratioFiles -gt 1.5) {
+    if ($ratioBytes -gt 1.5 -or $ratioFiles -gt 1.5 -or $Actual.ReparseSkipped -gt 0) {
         throw @"
 [install] COPY SANITY CHECK FAILED at $Where
   source:  $($Expected.Bytes) bytes, $($Expected.Files) files
   target:  $($Actual.Bytes) bytes, $($Actual.Files) files
   ratio:   bytes=$([math]::Round($ratioBytes,2)) files=$([math]::Round($ratioFiles,2))
+  reparse: source=$($Expected.ReparseSkipped) target=$($Actual.ReparseSkipped)
+  (v24: a reparse point in the target outside the excluded install/dependency
+   dirs means a junction or symlink got copied -- that is the v4 failure mode.
+   The caller states which dirs it excluded, right in the line above.)
   The target grew far beyond the source -- a junction/symlink loop was
   probably copied (see v4 incident: ui\node_modules\codeagent self-link,
   6.6 GB junk). The install has STOPPED. Inspect the target for
@@ -2382,7 +2711,25 @@ $script:LiveFieldNameRe = '(?i)^(api_?key(?!env)|access_?token|auth_?token|id_?t
 $script:ModelArtifactNameRe = '(?i)^(tokenizer|tokenizer_config|vocab|special_tokens_map|added_tokens|merges)\.(json|txt|bin)$|^(spiece|sentencepiece)\.(model|bin)$|\.onnx(\.data)?$'
 
 function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
-    $skPattern = '(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}'
+    # v24 (2026-10-13, real-machine blocker): the old bound was {8,},
+    # so the sweep matched library IDENTIFIERS -- "sk-ssh-ed25519@openssh.com"
+    # (the OpenSSH security-key type string) inside
+    # python\.venv\Lib\site-packages\cryptography\hazmat\primitives\serialization\ssh.py,
+    # a file this installer pip-installs itself via
+    # mnemosyne-memory -> mcp -> pyjwt[crypto]. Every fresh install was
+    # stopped by its own gate (EXIT=1) as soon as the venv contained
+    # cryptography. Real key shapes all survive {20,}: sk-<32 hex>
+    # (DeepSeek/DashScope), sk-<48> (OpenAI), sk-proj-<100+>.
+    $skPattern = '(?<![A-Za-z0-9])(?!sk-(?:ssh|ecdsa)-)sk-[A-Za-z0-9_\-]{20,}'
+    # v24: never descend into trees the installer builds itself
+    # (.venv/site-packages/node_modules/runtime/packages) nor into
+    # user-owned data. Third-party sources ship thousands of
+    # key-shaped strings; this gate targets a DEV credential backup
+    # that rode along inside the app copy, which lives in the app
+    # tree -- not in dependency trees.
+    $skipDirRe = '(?i)^(\.venv|site-packages|node_modules|runtime|packages|userdata|data|\.git|__pycache__|\.pytest_cache|\.mypy_cache|\.cache)$'
+    $script:sweepSkipped = @()
+    $script:sweepScanned = 0
     $liveFieldRe = if ($script:LiveFieldNameRe) { $script:LiveFieldNameRe } else { '(?i)^(api_?key(?!env)|access_?token|auth_?token|id_?token|refresh_?token|session_?token|client_?secret|secret|secret_?key|api_?secret|app_?secret|consumer_?secret|shared_?secret|password|user_?password|admin_?password|passwd|passphrase|private_?key|credential|credentials|authorization|auth)$' }
     $modelArtifactRe = if ($script:ModelArtifactNameRe) { $script:ModelArtifactNameRe } else { '(?i)^(tokenizer|tokenizer_config|vocab|special_tokens_map|added_tokens|merges)\.(json|txt|bin)$|^(spiece|sentencepiece)\.(model|bin)$|\.onnx(\.data)?$' }
     $script:credFindings = @()
@@ -2392,9 +2739,16 @@ function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
         $dir = $sweepStack.Pop()
         foreach ($child in (Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)) {
             if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
-            if ($child.PSIsContainer) { $sweepStack.Push($child); continue }
+            if ($child.PSIsContainer) {
+                # v24: skip installer-built and user-owned trees
+                # (see $skipDirRe) -- dependency sources are full of
+                # key-shaped strings that are not credentials.
+                if ($child.Name -match $skipDirRe) { $script:sweepSkipped += $child.FullName; continue }
+                $sweepStack.Push($child); continue
+            }
             if ($child.Length -eq 0) { continue }
             if ($child.Length -gt 10MB) { continue }  # payloads; keys never live here
+            $script:sweepScanned++
             if ($SkipFiles -and ($SkipFiles -contains $child.FullName)) { continue }
             $raw = $null
             try { $raw = [IO.File]::ReadAllBytes($child.FullName) } catch { continue }
@@ -2465,18 +2819,31 @@ function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
     }
     if ($script:credFindings.Count -gt 0) {
         $list = ($script:credFindings | Select-Object -First 8) -join [Environment]::NewLine + "  "
+        # v24: state the sweep's scope so the failure is never a guess.
+        $skipList = if ($script:sweepSkipped.Count -gt 0) { (($script:sweepSkipped | Sort-Object -Unique | Select-Object -First 6) -join [Environment]::NewLine + "    ") } else { "(none present)" }
         throw @"
 
 [install] SECURITY FAILURE: credentials leaked from source tree.
   The install tree contains live credential material:
   $list
-  The source tree must NEVER ship .env / config.json / *.bak / backup
-  copies of them (see the v21 copy /XF list and this content sweep).
+
+  Sweep scope: $Root
+    files inspected : $($script:sweepScanned)
+    directories skipped (not scanned):
+    $skipList
+  Skipped trees are installer-built (.venv/site-packages/node_modules/
+  runtime/packages) or user-owned (data/userdata). Third-party library
+  sources legitimately contain key-shaped strings, e.g. the OpenSSH
+  type identifier "sk-ssh-ed25519@openssh.com" in the cryptography
+  package; those are NOT credentials and must not stop an install.
+  The target of this gate is a DEV credential backup that rode along
+  in the app copy: .env / config.json / *.bak / backup copies of them
+  (see the v21 copy /XF list and this content sweep).
   The install has STOPPED. Delete $InstallDir, clean the source tree
   of dev backups, and re-run.
 "@
     }
-    Write-Host "[install] credential sweep OK: no sk- key material and no valued apiKey field anywhere under $Root"
+    Write-Host ("[install] credential sweep OK: no sk- key material and no valued apiKey field in the {0} files inspected under {1} (skipped {2} dependency/user dirs)" -f $script:sweepScanned, $Root, $script:sweepSkipped.Count)
 }
 
 
@@ -3672,6 +4039,43 @@ FIX (pick one):
         }
     }
 
+    # 1b) v24 (2026-10-13 real-machine fix): 'npm install' can leave
+    #     node_modules\electron WITHOUT its dist\ -- the package's
+    #     postinstall did not run to completion -- and npm then reports
+    #     "up to date" forever, so nothing ever retries. The artifact
+    #     check below then failed and the user was told to fix it by
+    #     hand (that was the observed real-machine outcome).
+    #     Repair deterministically: run the package's own install.js
+    #     with ELECTRON_MIRROR set, then re-require the binary. The
+    #     artifact check stays as the loud last resort.
+    if (-not (Test-Path -LiteralPath $electronExe)) {
+        $elDir = Join-Path $InstallDir "node_modules\electron"
+        $elInstallJs = Join-Path $elDir "install.js"
+        if (Test-Path -LiteralPath $elInstallJs) {
+            Invoke-Step "electron runtime binary (postinstall repair)" {
+                Push-Location $elDir
+                $prevEap = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Continue'
+                    & node install.js 2>&1 | ForEach-Object { Write-Host "  $_" }
+                    $rcEl = $LASTEXITCODE
+                    if ($rcEl -ne 0) { Write-Host "[install] electron install.js rc=$rcEl (verifying the binary anyway)" }
+                } finally {
+                    $ErrorActionPreference = $prevEap
+                    Pop-Location
+                }
+                $global:LASTEXITCODE = 0
+            }
+        } else {
+            Write-Host "[install] build: node_modules\electron\install.js absent -- cannot repair the runtime binary here"
+        }
+        if (Test-Path -LiteralPath $electronExe) {
+            Write-Host "[install] build: electron runtime binary repaired: $electronExe"
+        } else {
+            Write-Host "[install] build: electron runtime binary STILL missing after repair attempt"
+        }
+    }
+
     # 2) npm run build -> dist/electron/*.js + electron/renderer.bundle.js
     $mainJs = Join-Path $InstallDir "dist\electron\main.js"
     if ((Test-Path -LiteralPath $mainJs) -and (Test-Path -LiteralPath (Join-Path $InstallDir "electron\renderer.bundle.js"))) {
@@ -3693,15 +4097,56 @@ FIX (pick one):
     #    (tsc -b + vite build); stage; blank .env / config.json (both
     #    exist already post-install, so it leaves them untouched).
     $uiIndex = Join-Path $InstallDir "electron\ui\index.html"
-    if (Test-Path -LiteralPath $uiIndex) {
-        Write-Host "[install] build: electron\ui\index.html already present -- skipping scripts\build-ui.ps1"
+    # v24 (2026-10-13 real-machine fix): the guard used to skip on mere
+    # EXISTENCE ("electron\ui\index.html already present"), and the packaged
+    # source carried a stale staged UI -- measured on the test machine: the staged
+    # electron\ui was 09-25 19:07 (title "WorkBuddy") while ui/src was
+    # 10-13 01:55, so the installed app ran a half-month-old interface with
+    # none of the new features in it. Skip only when the staged UI is NEWER
+    # than the newest UI source file; otherwise rebuild.
+    $uiSrcDir = Join-Path $InstallDir "ui\src"
+    $uiSrcNewest = $null
+    if (Test-Path -LiteralPath $uiSrcDir) {
+        $uiSrcNewest = Get-ChildItem -LiteralPath $uiSrcDir -Recurse -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        foreach ($extra in @("ui\index.html", "ui\package.json", "ui\vite.config.ts")) {
+            $extraPath = Join-Path $InstallDir $extra
+            if (Test-Path -LiteralPath $extraPath) {
+                $extraItem = Get-Item -LiteralPath $extraPath
+                if ($uiSrcNewest -eq $null -or $extraItem.LastWriteTime -gt $uiSrcNewest.LastWriteTime) { $uiSrcNewest = $extraItem }
+            }
+        }
+    }
+    $uiStaged = $null
+    if (Test-Path -LiteralPath $uiIndex) { $uiStaged = (Get-Item -LiteralPath $uiIndex).LastWriteTime }
+    $needUiBuild = $true
+    if ($uiStaged -ne $null -and $uiSrcNewest -ne $null -and $uiStaged -ge $uiSrcNewest.LastWriteTime) { $needUiBuild = $false }
+    if (-not $needUiBuild) {
+        Write-Host "[install] build: staged UI is newer than ui\src (staged $($uiStaged.ToString('yyyy-MM-dd HH:mm')) >= source $($uiSrcNewest.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))) -- keeping it"
     } else {
+        if ($uiStaged -eq $null) {
+            Write-Host "[install] build: electron\ui\index.html is missing -- running scripts\build-ui.ps1"
+        } else {
+            Write-Host "[install] build: staged UI is STALE (staged $($uiStaged.ToString('yyyy-MM-dd HH:mm')) < ui\src $($uiSrcNewest.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))) -- running scripts\build-ui.ps1"
+        }
         $buildUi = Join-Path $InstallDir "scripts\build-ui.ps1"
         if (-not (Test-Path -LiteralPath $buildUi)) { throw "[install] build: scripts\build-ui.ps1 not found under the install tree -- source copy incomplete?" }
         Invoke-Step "building the UI (scripts\build-ui.ps1 -> electron\ui)" {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $buildUi
-            if ($LASTEXITCODE -ne 0) { throw "[install] build-ui.ps1 failed (rc=$LASTEXITCODE) -- UI will be missing; the app window would open BLACK" }
+            if ($LASTEXITCODE -ne 0) { throw "[install] build-ui.ps1 failed (rc=$LASTEXITCODE) -- the UI would be missing or stale; the window would open BLACK or show an old interface" }
             $global:LASTEXITCODE = 0
+        }
+    }
+    # post-condition: never leave a missing/stale staged UI behind silently
+    if ($uiSrcNewest -ne $null) {
+        $stageNow = $null
+        if (Test-Path -LiteralPath $uiIndex) { $stageNow = (Get-Item -LiteralPath $uiIndex).LastWriteTime }
+        if ($stageNow -eq $null) {
+            throw "[install] build: electron\ui\index.html still missing after the UI step -- the window would open BLACK"
+        } elseif ($stageNow -lt $uiSrcNewest.LastWriteTime) {
+            Write-Warning "[install] build: staged UI ($($stageNow.ToString('yyyy-MM-dd HH:mm'))) is STILL older than ui\src ($($uiSrcNewest.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))) after the UI step -- the installed interface may be outdated"
+        } else {
+            Write-Host "[install] build: staged UI verified fresh: electron\ui\index.html $($stageNow.ToString('yyyy-MM-dd HH:mm')) >= ui\src $($uiSrcNewest.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))"
         }
     }
 }
@@ -4219,9 +4664,20 @@ if ($copyDone) {
         "htmlcov", ".cache", "tests", "test", "__pycache__",
         ".nyc_output", "coverage", "backups", "docs", ".github", ".venv", "data"
     )
+    # v24 (2026-10-13 real-machine fix): the TARGET also holds things the
+    # copy never wrote -- the installer downloads the guard model into
+    # python\models and stages the Node archive in packages\. Measured on
+    # test machine: source 12,093,923 B vs target 254,636,045 B (21x) purely from
+    # decision_bert.onnx.data (205,880,832 B) + node-v22.20.0 zip
+    # (35,500,968 B). A re-install over an existing tree therefore died
+    # with the misleading "junction/symlink loop" message. Exclude those
+    # on the TARGET side only; the check only fails on growth > 1.5x, so
+    # this can only remove false positives, never hide a blown-up copy of
+    # the app tree itself.
+    $sanityTargetExtra = @("models", "packages", "userdata", ".kanban-scratch")
     $srcStats = Get-TreeStats $sourceRoot $copyExcludes
-    $dstStats = Get-TreeStats $InstallDir $copyExcludes
-    Assert-CopySanity $srcStats $dstStats "app tree copy"
+    $dstStats = Get-TreeStats $InstallDir ($copyExcludes + $sanityTargetExtra)
+    Assert-CopySanity $srcStats $dstStats "app tree copy (target also excludes: $($sanityTargetExtra -join ', '))"
     # v9 SECURITY hard backstop (see Assert-BlankConfig): if the copy
     # wrote a non-blank .env or a non-blank config.json, the install
     # dies HERE -- before any marker is written, before the target is
@@ -4492,10 +4948,138 @@ if (-not $offlinePip) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# v27 (t_8ce86a47): memory engine (mnemosyne) -- optional but attempted by
+# default, same fail-soft contract as the guard layer. The sidecar probes
+# find_spec("mnemosyne"); without the package the memory hooks stay
+# disabled and the app runs exactly as before -- so a failed install here
+# is a WARNING, never an abort. WheelDir installs go through the same
+# reqs loop above? No: memory is a THIRD optional layer with its own
+# offline branch (wheels must include the fastembed/sqlite-vec deps or
+# the layer simply reports "not installed").
+# ---------------------------------------------------------------------------
+$Script:MemoryInstalled = $false
+$Script:MemoryReason = ""
+$memoryReq = "python\requirements-memory.txt"
+$memoryPath = Join-Path $InstallDir $memoryReq
+if (-not (Test-Path -LiteralPath $venvPy)) {
+    $Script:MemoryReason = "no venv python (offline install without venv)"
+} elseif (-not (Test-Path -LiteralPath $memoryPath)) {
+    $Script:MemoryReason = "missing $memoryReq"
+} elseif (-not $offlinePip) {
+    & $venvPy -m pip install -i $IndexUrl -r $memoryPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "[install] memory mirror failed, falling back to official PyPI for $memoryReq"
+        & $venvPy -m pip install -r $memoryPath
+        if ($LASTEXITCODE -ne 0) { $Script:MemoryReason = "pip failed on $memoryReq (mirror + PyPI)" }
+    }
+} elseif ($WheelDir) {
+    & $venvPy -m pip install --no-index --find-links $WheelDir -r $memoryPath
+    if ($LASTEXITCODE -ne 0) { $Script:MemoryReason = "offline wheels incomplete for $memoryReq (fastembed/sqlite-vec missing?)" }
+} else {
+    # plain -Offline, no WheelDir: venv trusted as-is; verification below decides.
+}
+if (-not $Script:MemoryReason) {
+    # v27 VERIFICATION (not just install): the sidecar starts the engine as
+    # `python -m mnemosyne.mcp_server --transport stdio` in a subprocess
+    # with the host-pinned environment. Verify BOTH halves:
+    #   (a) find_spec("mnemosyne") -- the exact probe sidecar.py runs;
+    #   (b) the pinned env keys SURVIVE into a subprocess launched with
+    #       only inherited env (this is how the sidecar spawns it), and
+    #       mcp_server's module path is importable there.
+    # The embedding model itself is NOT downloaded here (first-use lazy
+    # fetch via HF_ENDPOINT mirror, handled by the app's build_env()).
+    # v24 (2026-10-13, real-machine blocker #2): this probe used to be
+    #   $probe = & $venvPy -c $envScript 2>&1
+    # which broke two ways on PS 5.1:
+    #  (1) a multi-line string handed to a native exe is not passed
+    #      intact, so python got a mangled script ("File <string>,
+    #      line 4" SyntaxError);
+    #  (2) under $ErrorActionPreference='Stop' a native command that
+    #      writes to stderr raises a TERMINATING error -- so a probe
+    #      whose entire design is fail-soft (report MISS, fall through
+    #      to the warning below) instead ABORTED every fresh install
+    #      right here, with no [install] line after it.
+    # Fix: run it from a real temp .py file, and hold the preference at
+    # Continue across the native call so stderr cannot be fatal.
+    $probePy = Join-Path $env:TEMP ("ca-memprobe-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".py")
+    Set-Content -LiteralPath $probePy -Encoding ASCII -Value @'
+import importlib.util, os, sys
+spec = importlib.util.find_spec("mnemosyne")
+if spec is None:
+    print("MISS package: find_spec('mnemosyne') is None")
+    sys.exit(1)
+import mnemosyne.mcp_server  # the -m entrypoint the sidecar spawns
+req = [("MNEMOSYNE_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5"),
+       ("MNEMOSYNE_VEC_TYPE", "int8"),
+       ("MNEMOSYNE_LLM_ENABLED", "false"),
+       ("MNEMOSYNE_EMBEDDINGS_VIA_API", "0")]
+for key, want in req:
+    got = os.environ.get(key)
+    if got != want:
+        print("MISS env: %s=%r (pinned layer must supply %r)" % (key, got, want))
+        sys.exit(1)
+print("OK mnemosyne=%s mcp_server importable, pinned env visible in subprocess" % spec.name)
+'@
+    # The four pinned keys are supplied by the HOST at runtime
+    # (memory_config.build_env), NOT by the installer -- requirement 4
+    # forbids re-implementing them here. The assertion below proves the
+    # HAND-OFF mechanism: the same values, set in this parent process
+    # exactly the way the host sets them, reach the python child
+    # unchanged (the sidecar spawns the engine the same way).
+    $env:MNEMOSYNE_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+    $env:MNEMOSYNE_VEC_TYPE = "int8"
+    $env:MNEMOSYNE_LLM_ENABLED = "false"
+    $env:MNEMOSYNE_EMBEDDINGS_VIA_API = "0"
+    $probeRc = 1
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $probe = & $venvPy $probePy 2>&1
+        $probeRc = $LASTEXITCODE
+    } catch {
+        $probe = "$_"
+    } finally {
+        $ErrorActionPreference = $prevEap
+        Remove-Item -LiteralPath $probePy -Force -ErrorAction SilentlyContinue
+    }
+    $probeText = "$probe"
+    Write-Host "[install] memory verify: $probeText"
+    if ($probeRc -eq 0 -and $probeText -match "^OK ") {
+        $Script:MemoryInstalled = $true
+    } else {
+        if (-not $Script:MemoryReason) { $Script:MemoryReason = "verification failed: $probeText" }
+    }
+    Remove-Item Env:MNEMOSYNE_EMBEDDING_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:MNEMOSYNE_VEC_TYPE -ErrorAction SilentlyContinue
+    Remove-Item Env:MNEMOSYNE_LLM_ENABLED -ErrorAction SilentlyContinue
+    Remove-Item Env:MNEMOSYNE_EMBEDDINGS_VIA_API -ErrorAction SilentlyContinue
+}
+if ($Script:MemoryInstalled) {
+    Write-Host "[install] memory engine installed (mnemosyne-memory; embedding model fetched lazily on first use via HF_ENDPOINT mirror)"
+} else {
+    Write-Warning "[install] memory engine NOT installed ($($Script:MemoryReason)) -- the app runs WITHOUT memory features (sidecar memory hooks disabled); re-run online or extend -WheelDir to fix"
+}
+
+# ---------------------------------------------------------------------------
+# v28 (t_eea5a4ac): step 2c-bis -- guard model files from ModelScope.
+# Runs AFTER the app-tree copy (the dir must exist) and after the
+# guard pip layer (fail-soft contract of the whole guard stack).
+# -Offline / -SkipModelDownload / -ModelScopeRepo "" skip the network;
+# local files are still checked and reported. NEVER throws.
+# ---------------------------------------------------------------------------
+$guardModelDir = Join-Path $InstallDir "python\models\decision_bert"
+$guardModelNetwork = (-not $Offline) -and (-not $SkipModelDownload) -and [bool]$ModelScopeRepo
+Install-GuardModel -ModelDir $guardModelDir -AllowNetwork:$guardModelNetwork
+
 # self-check: the 5 packages bootstrap checks
 if (Test-Path -LiteralPath $venvPy) {
     Invoke-Step "self-check (Pillow/pymupdf/pypdf/openpyxl/python-docx)" {
-        & $venvPy -c @'
+        # v24: same PS 5.1 constraint as the memory probe -- a multi-line
+        # here-string passed to a native exe arrives mangled, so run the
+        # probe from a temp .py file and keep stderr non-fatal.
+        $checkPy = Join-Path $env:TEMP ("ca-depcheck-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".py")
+        Set-Content -LiteralPath $checkPy -Encoding ASCII -Value @'
 import sys
 print('  python', sys.version.split()[0])
 for mod, label in (('PIL','Pillow'),('fitz','pymupdf'),('pypdf','pypdf'),
@@ -4505,6 +5089,14 @@ for mod, label in (('PIL','Pillow'),('fitz','pymupdf'),('pypdf','pypdf'),
     except Exception as exc:
         print('  MISS ', label, '->', type(exc).__name__)
 '@
+        $prevEap2 = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $venvPy $checkPy 2>&1 | ForEach-Object { Write-Host "  $_" }
+        } finally {
+            $ErrorActionPreference = $prevEap2
+            Remove-Item -LiteralPath $checkPy -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -4654,8 +5246,17 @@ Invoke-Step "writing launcher $bat" {
     if ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
         $pathSetup = 'set "PATH=%~dp0runtime\node;%PATH%"'
     }
-    $electronLine = '  "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."' + $userProfileArg
-    $npmLine = '  call npm start --' + $userProfileArg
+    # v24 (2026-10-13 real-machine fix; user: "can the agent start without
+    # leaving a cmd window sitting in the background"):
+    # the launcher used to run electron in the FOREGROUND, so its cmd console
+    # stayed alive for the whole app lifetime -- measured on the test machine while the app
+    # was up: cmd.exe pid 4800 (the launcher) plus two conhost.exe. Launch it
+    # detached instead: electron is a GUI binary and needs no console, so the
+    # launcher exits at once and its console closes with it. The exe path must
+    # be quoted and `start` needs an explicit "" window title, otherwise the
+    # first quoted argument is taken as the title and the app never starts.
+    $electronLine = '  start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."' + $userProfileArg
+    $npmLine = '  start "" /b cmd /c npm start --' + $userProfileArg
     $lines = @(
         "@echo off",
         'cd /d "%~dp0"',
@@ -4836,19 +5437,30 @@ if (-not $Script:DataDirExplicit) {
 # ---------------------------------------------------------------------------
 if (-not $NoShortcut) {
     $shell = New-Object -ComObject WScript.Shell
+    # v24 (2026-10-13): IconLocation points at the shipped icon so the
+    # desktop / Start Menu entries do not show a generic .bat page icon.
+    # Existing shortcuts are UPDATED rather than skipped -- previously a
+    # leftover .lnk from an earlier install kept the wrong icon (and a
+    # stale target) forever. WindowStyle 7 = minimized: CodeAgent.bat
+    # boots electron and the console it opens should not sit visibly on
+    # the desktop.
+    $iconPath = Join-Path $InstallDir 'resources\icon.ico'
     $targets = @(
         @{ Ln = Join-Path ([Environment]::GetFolderPath('Desktop')) "$($Script:AppDirName).lnk" },
         @{ Ln = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$($Script:AppDirName).lnk" }
     )
     foreach ($t in $targets) {
-        if (Test-Path -LiteralPath $t.Ln) {
-            Write-Host "[install] shortcut exists, skipped: $($t.Ln)"
+        $existed = Test-Path -LiteralPath $t.Ln
+        $sc = $shell.CreateShortcut($t.Ln)
+        $sc.TargetPath = $bat
+        $sc.WorkingDirectory = $InstallDir
+        $sc.Description = "CodeAgent"
+        if (Test-Path -LiteralPath $iconPath) { $sc.IconLocation = "$iconPath,0" }
+        $sc.WindowStyle = 7
+        $sc.Save()
+        if ($existed) {
+            Write-Host "[install] shortcut updated: $($t.Ln)"
         } else {
-            $sc = $shell.CreateShortcut($t.Ln)
-            $sc.TargetPath = $bat
-            $sc.WorkingDirectory = $InstallDir
-            $sc.Description = "CodeAgent"
-            $sc.Save()
             Write-Host "[install] shortcut created: $($t.Ln)"
         }
     }
@@ -4877,6 +5489,25 @@ if ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
 }
 if ($Script:CacheDir) {
     Write-Host "  package caches: $Script:CacheDir (pip\, npm\ -- inside the install tree; deleting/moving the whole directory leaves no machine residue)"
+}
+# v27 (t_8ce86a47): required one-line memory engine summary.
+if ($Script:MemoryInstalled) {
+    Write-Host "  memory engine: installed ($($venvPy) -> mnemosyne-memory; embedding model Qdrant/bge-small-zh-v1.5 fetched lazily on first use via HF_ENDPOINT mirror)"
+} else {
+    Write-Host "  memory engine: not installed ($($Script:MemoryReason)) -- app runs without memory features"
+}
+# v28 (t_eea5a4ac): guard model state in the completion report. Missing
+# required files were already WARNED with self-heal lines above; the
+# report line makes the final state impossible to miss.
+if ($Script:GuardModelMissing.Count -eq 0) {
+    $gmNotes = @()
+    if ($Script:GuardModelUnverified.Count) { $gmNotes += "$($Script:GuardModelUnverified.Count) unverified (no expected sha256)" }
+    if (-not $guardModelNetwork) { $gmNotes += "no download attempted (-Offline/-SkipModelDownload/no repo)" }
+    $gmExtra = ""
+    if ($gmNotes.Count) { $gmExtra = " ($($gmNotes -join '; '))" }
+    Write-Host "  guard model:  OK -- $($Script:GuardModelOk) file(s) sha256-verified$gmExtra in $guardModelDir"
+} else {
+    Write-Host "  guard model:  DEGRADED (pure-regex guard) -- missing/invalid: $($Script:GuardModelMissing -join ', ') in $guardModelDir (self-heal lines printed above; the app still runs)"
 }
 # v24 (t_ab909828): the build state and the UI artifact path are part of
 # the completion report (field incident: "green" install, black window,

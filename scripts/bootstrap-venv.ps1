@@ -90,6 +90,24 @@ if (-not (Test-Path $guardReq)) {
     }
 }
 
+
+# Memory engine layer (mnemosyne-memory) is OPTIONAL: a failed install
+# only warns and continues -- the sidecar probes find_spec("mnemosyne")
+# and disables memory hooks when absent; the app always runs. The
+# embedding model is NOT fetched here (lazy first-use via HF_ENDPOINT).
+$memoryReq = Join-Path $Root "python\requirements-memory.txt"
+if (-not (Test-Path $memoryReq)) {
+    Write-Warning "[bootstrap] optional memory-engine requirements missing: $memoryReq (skipped)"
+} else {
+    Write-Host "[bootstrap] installing (optional) requirements-memory.txt"
+    & $py -m pip install -r $memoryReq
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "[bootstrap] requirements-memory.txt install failed -- memory features unavailable (sidecar memory hooks stay disabled); bootstrap continues"
+    } else {
+        Write-Host "[bootstrap] memory engine installed (mnemosyne-memory; embedding model fetched lazily on first use)"
+    }
+}
+
 Write-Host "[bootstrap] self-check"
 & $py -c @"
 import sys

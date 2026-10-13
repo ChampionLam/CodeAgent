@@ -21,7 +21,7 @@
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow/root"],
         "env": {},
-        "enabled": true
+        "enabled": false
       },
       "remote-x": {
         "transport": "http",
