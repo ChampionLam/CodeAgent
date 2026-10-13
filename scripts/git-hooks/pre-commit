@@ -28,7 +28,8 @@ SKIP="^scripts/git-hooks/|^tests/"
 #    例外：.env.example / .env.sample / .env.template 是可以入库的空白模板
 #    （.gitignore 里也显式放行了 .env.example），新建仓库的首次提交必须能过。
 hits=$(git diff --cached --name-only | grep -E '(^|/)\.env$|(^|/)\.env\.[^.]+$|(^|/)config\.json$|\.db$|\.db-wal$|\.db-shm$|\.pem$|(^|/)id_(rsa|ed25519|ecdsa)$|credential|auth\.json' \
-  | grep -Ev '(^|/)\.env\.(example|sample|template)$' || true)
+  | grep -Ev '(^|/)\.env\.(example|sample|template)$' \
+  | grep -Ev '(^|/)python/models/[^/]+/config\.json$' || true)
 [ -n "$hits" ] && report "有密钥/用户数据类文件被 add 了（.env / config.json / *.db / 私钥 / 凭证）" "$hits"
 
 # 2) 真 key 值模式
@@ -62,7 +63,8 @@ fi
 # 6) 邮箱与手机号（noreply 与示例域不算）
 #    手机号要求前后不是数字：否则长数字串（时间戳/资源 id，例如 1790519134260）会被误判成手机号。
 hits=$(git grep --cached -In -E '([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$))' 2>/dev/null \
-  | grep -Ev "$SKIP" | grep -v 'users.noreply.github.com' | grep -v 'example.com' | grep -v '@types' || true)
+  | grep -Ev "$SKIP" | grep -v 'users.noreply.github.com' | grep -v 'example.com' | grep -v '@types' \
+  | grep -v '@openssh.com' || true)
 [ -n "$hits" ] && report "邮箱 / 手机号" "$hits"
 
 # 7) 内部口径与私有环境痕迹：这些词与路径一旦进公开仓就是泄密线索。
@@ -75,15 +77,20 @@ J_CODE_3="i7-""4720""HQ"           # 验证环境所用机器的 CPU 型号
 J_PATH_1="/app/""obsidian"         # 私有知识库目录
 J_PATH_2="~""/"".hermes"           # 本机 agent 私有目录
 J_PATH_3="hermes-""agent/"         # 上游项目本地克隆目录名
-hits=$(git grep --cached -In -E "$J_CODE_1|$J_CODE_2|$J_CODE_3|$J_PATH_1|$J_PATH_2|$J_PATH_3" 2>/dev/null \
+J_PATH_4="/home/""champion_"'lam'  # 本人主目录的绝对路径
+J_PATH_5="~/""decision-bert"       # 内部模型训练项目路径
+J_PATH_6="kanban/""workspaces"     # 本机 agent 任务工作区
+J_PATH_7="ca-""v[0-9]+"            # 本机真机验证安装目录名
+hits=$(git grep --cached -In -E "$J_CODE_1|$J_CODE_2|$J_CODE_3|$J_PATH_1|$J_PATH_2|$J_PATH_3|$J_PATH_4|$J_PATH_5|$J_PATH_6|$J_PATH_7" 2>/dev/null \
   | grep -Ev "$J_SKIP" || true)
 [ -n "$hits" ] && report "内部代号 / 内网编号 / 机器型号 / 私有路径" "$hits"
 
 # 7b) 仓库所有者本名：只允许出现在 LICENSE、ACKNOWLEDGEMENTS.md 与本仓自己的 GitHub URL 里
 J_NAME="Cham""pion""Lam"
 J_NAME_OK="github.com/Champion""Lam/CodeAgent"
+J_NAME_OK2="Champion""Lam/commands-""guard-fp16"   # 本项目的模型分发仓（公开、故意的）
 hits=$(git grep --cached -Iin -E "$J_NAME" 2>/dev/null | grep -Ev "$J_SKIP" \
-  | grep -v -F "$J_NAME_OK" | grep -Ev '^(LICENSE|ACKNOWLEDGEMENTS\.md):' || true)
+  | grep -v -F "$J_NAME_OK" | grep -v -F "$J_NAME_OK2" | grep -Ev '^(LICENSE|ACKNOWLEDGEMENTS\.md):' || true)
 [ -n "$hits" ] && report "仓库所有者本名出现在不该出现的位置（只允许 LICENSE / ACKNOWLEDGEMENTS.md / 本仓自己的 GitHub URL）" "$hits"
 
 if [ "$fail" != "0" ]; then

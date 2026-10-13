@@ -170,6 +170,53 @@ Assert ($full -match 'function Test-SecretValue') "v23 Test-SecretValue still pr
 Assert ($full -match 'function Invoke-CredentialSweep') "v23 Invoke-CredentialSweep still present"
 Assert ($full -match 'function Assert-BlankConfig') "v23 Assert-BlankConfig still present"
 
+# 7. v24 sweep scope (2026-10-13 real-machine blocker): the content
+# sweep must still catch a DEV credential backup, and must NOT be
+# tripped by key-shaped strings inside dependency trees. Real-machine
+# evidence: cryptography\hazmat\primitives\serialization\ssh.py carries
+# the OpenSSH type identifier "sk-ssh-ed25519@openssh.com"; the old
+# {8,} bound matched it and stopped every fresh install with EXIT=1 as
+# soon as the venv contained cryptography (installed via
+# mnemosyne-memory -> mcp -> pyjwt[crypto]).
+$fnStart = $full.IndexOf('function Invoke-CredentialSweep(')
+Assert ($fnStart -ge 0) 'v24 sweep function locatable for behavioral run'
+if ($fnStart -ge 0) {
+    $rest = $full.Substring($fnStart)
+    $fnEnd = $rest.IndexOf("`r`n}")
+    if ($fnEnd -lt 0) { $fnEnd = $rest.IndexOf("`n}") }
+    Invoke-Expression $rest.Substring(0, $fnEnd + 3)
+
+    # (a) realistic key in the APP tree -> must FAIL
+    $simA = Join-Path $env:TEMP ("ca-sweep-a-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path (Join-Path $simA 'python') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $simA 'python\dev_backup.env') -Value ('OPENAI_API_KEY=sk-' + ('A' * 48)) -Encoding ascii
+    $threwA = $false
+    try { Invoke-CredentialSweep -Root $simA -SkipFiles @() } catch { $threwA = $true }
+    Assert $threwA '(a) realistic sk- key in the app tree -> sweep FAILS (gate still works)'
+    Assert ($script:credFindings.Count -ge 1) '(a2) the offending file is reported'
+    Remove-Item -Recurse -Force $simA -ErrorAction SilentlyContinue
+
+    # (b) cryptography's sk-ssh identifier inside .venv -> must PASS
+    $simB = Join-Path $env:TEMP ("ca-sweep-b-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $cryDir = Join-Path $simB 'python\.venv\Lib\site-packages\cryptography\hazmat\primitives\serialization'
+    New-Item -ItemType Directory -Path $cryDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $cryDir 'ssh.py') -Value 'KEY_TYPES = ["sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com"]' -Encoding ascii
+    $threwB = $false
+    try { Invoke-CredentialSweep -Root $simB -SkipFiles @() } catch { $threwB = $true }
+    Assert (-not $threwB) '(b) cryptography sk-ssh identifier inside .venv -> sweep PASSES (no false positive)'
+    Assert ($script:sweepSkipped.Count -ge 1) '(b2) the venv tree was reported as skipped, not scanned'
+    Remove-Item -Recurse -Force $simB -ErrorAction SilentlyContinue
+
+    # (c) short non-secret sk- token outside dependency trees -> PASS
+    $simC = Join-Path $env:TEMP ("ca-sweep-c-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $simC -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $simC 'notes.md') -Value 'see sk-learn-notes for the old draft' -Encoding ascii
+    $threwC = $false
+    try { Invoke-CredentialSweep -Root $simC -SkipFiles @() } catch { $threwC = $true }
+    Assert (-not $threwC) '(c) short sk- token (not key-shaped, <20 chars) -> sweep PASSES'
+    Remove-Item -Recurse -Force $simC -ErrorAction SilentlyContinue
+}
+
 Write-Output ""
 Write-Output ("v24 selfcheck: pass=$($script:pass) fail=$($script:fail)")
 if ($script:fail -gt 0) { exit 1 }
