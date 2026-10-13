@@ -515,6 +515,94 @@
 #     exclusion list); real Windows robocopy /XD /XF semantics are
 #     documented robocopy behavior, parser-verified. NOT
 #     field-tested on a real Windows box yet.
+#   - v23 (task t_d37fca26, 2026-10-13). FIFTH FIELD REGRESSION
+#     (field box, 2026-10-13 14:0x, v21-era sweep): SECURITY FALSE
+#     POSITIVE. The v21 credential sweep's live-field regex
+#     `.*_?token` matched BARE field names, so a shipped model
+#     artifact -- python\models\decision_bert\tokenizer.json
+#     (268,943 B) -- tripped it on `unk_token` and the installer
+#     hard-stopped. HuggingFace tokenizer.json ALWAYS contains
+#     unk_token / pad_token / cls_token / mask_token; any tree that
+#     ships the guardian model can never install. Fixes (precision,
+#     not removal -- the gate stays):
+#     a) field name is now an EXACT allowlist of credential names
+#        (api_key, access_token, secret_key, client_secret,
+#        password, ...), not a fuzzy `.*_?token` suffix match;
+#     b) the VALUE must also look like a secret: length >= 16 or a
+#        sk- key shape or high entropy-ish charset; short symbolic
+#        tokens ("[UNK]", "[PAD]", token ids) never match;
+#     c) model artifacts are exempt: *.onnx, *.onnx.data,
+#        tokenizer.json, vocab.json, vocab.txt, special_tokens_map.json,
+#        added_tokens.json, merges.txt, spiece.model, tokenizer_config.json;
+#     d) regression samples added to the v23 selfcheck:
+#        tokenizer.json -> pass, config.json.bak with sk- -> THROW,
+#        empty template config.json + 0-byte .env -> pass.
+#     Changelog normalization note: the on-disk script was at v22
+#     content (t_a8ceb810) with only a v21 header block; this entry
+#     is numbered v23 to keep the ledger monotonic.
+#   - v24 (task t_ab909828, 2026-10-13). FOURTH FIELD REGRESSION:
+#     install from a clone/zip source finished GREEN, the app opened
+#     to a BLACK WINDOW. Root cause: the app's launch-critical files
+#     are gitignored BUILD PRODUCTS -- dist/ (.gitignore line 2) and
+#     electron/ui/ (line 26) -- and .gitignore'd content never rides
+#     along in a clone; the installer only WARNED ("target machine
+#     will need 'npm install'") and completed. Fixes:
+#     a) NEW BUILD STAGE (Invoke-AppBuild) after the Node bootstrap,
+#        online installs by default: npm install (root, npmmirror
+#        registry + ELECTRON_MIRROR) -> npm run build (dist\electron\
+#        + electron\renderer.bundle.js) -> scripts\build-ui.ps1
+#        (ui build + stage ui\dist -> electron\ui). All npm runs use
+#        the installer's OWN Node (<InstallDir>\runtime\node on
+#        PATH), never a system Node. Each step is idempotent (skips
+#        when its artifact already exists).
+#     b) HARD ARTIFACT GATE before the launcher is written: all three
+#        of dist\electron\main.js, electron\ui\index.html,
+#        node_modules\electron\dist\electron.exe must exist, else the
+#        install FAILS with the manual remedy printed. The old
+#        behavior (warn + install a dead app) is gone.
+#     c) NEW -SkipBuild switch: skip the build (with -Offline it is
+#        implied), each with explicit "the installed app WILL NOT
+#        START as-is" warnings and the manual build recipe.
+#     d) The FALSE comment at the launcher step (claiming the compiled
+#        main is repo content) is corrected.
+#     e) Completion report now prints build state (YES/NO) and the
+#        UI artifact path. The GUI wizard (install-gui.ps1) calls
+#        this same script and inherits everything.
+#   - v25 (task t_27714fcb, 2026-10-13). DATA DIR INTO THE INSTALL
+#     TREE. Field finding: logs + sessions.db landed in
+#     %APPDATA%\CodeAgent\data -- outside the "one movable/deletable
+#     directory" promise. Fixes (installer/template side only; the
+#     python engine is untouched):
+#     a) -DataDir now DEFAULTS to <InstallDir>\data (was: empty =
+#        Electron default %APPDATA%\CodeAgent). Explicit -DataDir
+#        still wins (existing usage preserved).
+#     b) Launcher now always passes BOTH --user-data-dir="<InstallDir>
+#        \userdata" (Chromium profile: Cache/Network/Preferences) and
+#        DESK_AGENT_DATA_DIR="<InstallDir>\data" (sidecar data:
+#        logs/sessions.db/audit.db). Split per t_27714fcb comment:
+#        avoids the <InstallDir>\data\data double nesting, keeps user
+#        data vs browser cache distinguishable at a glance.
+#     c) electron/main.ts (glue only) now RESPECTS an inherited
+#        DESK_AGENT_DATA_DIR instead of overwriting it with
+#        <userData>\data; no inherited value -> legacy behavior.
+#     d) ROBOCOPY SAFETY: the source repo's own data\ dir (dev
+#        sessions.db / audit.db) is excluded from the app-tree copy
+#        both by full source path and by /XF sessions.db / audit.db,
+#        so a re-install can never clobber <InstallDir>\data.
+#     e) UNINSTALL ORDER: the install-dir delete now runs AFTER the
+#        -PurgeData gate; when the data dir is inside the InstallDir,
+#        everything under it is removed with the tree (no -PurgeData
+#        needed -- the tree IS owned), and %APPDATA%\CodeAgent is
+#        never newly stamped for out-of-tree installs (v22 rule
+#        kept).
+#     f) Legacy-user compat: <InstallDir>\data absent while
+#        %APPDATA%\CodeAgent exists non-empty -> no auto-move, no
+#        delete, one final-report line telling the user to move it
+#        manually if they want.
+#     g) config.example.json: the filesystem MCP template entry is
+#        now enabled:false (spawn-guaranteed-to-fail placeholder
+#        path /path/to/allow/root + npx; field logs: mcp[filesystem]
+#        discover failed / exited during initialize).
 param(
     [string]$InstallDir = "",
     # v7: unified package/archive directory. Defaults to
@@ -541,6 +629,14 @@ param(
     # cache at them, so the whole install directory can be moved or
     # deleted without leaving cache residue on the machine.
     [string]$CacheDir = "",
+    # v25 (t_2d0783e3): default working directory. Empty = the new default
+    # <InstallDir>\workspace. Explicit -WorkspaceDir "wins" (it is this run's
+    # explicit user intent, so it IS written to config.json even when a
+    # config.json already exists). With no -WorkspaceDir, an existing
+    # non-empty capabilities.workspaceRoot is the user's earlier choice and is
+    # NEVER overwritten; a blank/absent value is filled with the resolved
+    # default. The directory is created (with a small README) either way.
+    [string]$WorkspaceDir = "",
     # Mirror roots. Defaults target mainland China; override for
     # other regions.
     # PbsMirror (v5): npmmirror date-directory layout, resolved
@@ -600,6 +696,14 @@ param(
     # fail (field: /repair -> 1602, /uninstall -> 1603). The
     # registry itself is NEVER written by this switch (only the
     # official installer exe route writes it, as before).
+    # v24 (t_ab909828): install WITHOUT build used to finish "green"
+    # and the app then opened to a BLACK WINDOW (clone/zip source has
+    # no dist/ and no electron/ui/ -- both are gitignored build
+    # outputs). Now the installer BUILDS them itself (npm install +
+    # npm run build + build-ui.ps1) using its own Node, and a missing
+    # artifact is a HARD error. -SkipBuild / -Offline keep the old
+    # behavior but say plainly that the installed app will not start.
+    [switch]$SkipBuild,
     [switch]$IgnoreRegistryState
 )
 
@@ -2158,8 +2262,16 @@ function Assert-BlankConfig([string]$InstallDir, [bool]$EnvExistedBefore, [bool]
                     # PSCustomObject: walk properties
                     foreach ($p in $node.PSObject.Properties) {
                         # key-ish / model-endpoint fields; apiKeyEnv is
-                        # excluded on purpose (variable NAME, not value)
-                        $isLiveField = $p.Name -match '(?i)^(api_?key(?!env)|.*_?token|.*_?secret|.*_?credential|.*_?password|base_?url|model|endpoint|url)$'
+                        # excluded on purpose (variable NAME, not value).
+                        # v23 (t_d37fca26): use the EXACT credential
+                        # name allowlist + secret-shaped VALUE check
+                        # (same rules as Invoke-CredentialSweep) instead
+                        # of the v21 fuzzy `.*_?token` suffix match, so
+                        # non-secret config choices never false-throw.
+                        $isLiveField = $p.Value -is [string] -and (
+                            ($p.Name -match '(?i)^(api_?key(?!env)|access_?token|auth_?token|refresh_?token|session_?token|client_?secret|secret|secret_?key|password|passwd|passphrase|authorization|credential)$' -and (Test-SecretValue ([string]$p.Value))) -or
+                            ($p.Name -match '(?i)^(base_?url|model|endpoint|url)$')
+                        )
                         if ($p.Value -is [string] -and $isLiveField -and ([string]$p.Value).Trim() -ne "") {
                             $script:badLeaves += "$path.$($p.Name) = <non-empty>"
                         } elseif (-not ($p.Value -is [string])) {
@@ -2208,9 +2320,46 @@ function Assert-BlankConfig([string]$InstallDir, [bool]$EnvExistedBefore, [bool]
 # $SkipFiles: absolute paths to leave alone (user-owned .env /
 # config.json on the FINAL sweep -- a user's own filled-in config is
 # not a leak). UTF-16LE (FF FE BOM) is decoded via the Unicode branch.
+# v23 (t_d37fca26): is this JSON field VALUE shaped like a live
+# secret? The v21 sweep flagged bare field NAMES (`unk_token` in a
+# shipped tokenizer.json hard-stopped the installer). Now the name
+# AND the value must both qualify. A value is a secret if it is an
+# sk- key, a Bearer/Token authorization header, or a long opaque
+# token (>=16 chars of key-ish charset). NOT secrets: "[UNK]",
+# "[PAD]", short symbolic tokens, variable references ("${VAR}",
+# "env:NAME"), URLs, null/true/false.
+function Test-SecretValue([string]$Value) {
+    $t = $Value.Trim().Trim('"').Trim("'")
+    if ($t.Length -eq 0) { return $false }
+    if ($t -match '(?i)^(?:sk|xk)-[A-Za-z0-9_\-]{8,}$') { return $true }
+    if ($t -match '(?i)^(?:bearer|token|basic)\s+[A-Za-z0-9_\-.+/=]{8,}$') { return $true }
+    if ($t -match '^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$') { return $false }       # variable NAME
+    if ($t -match '(?i)^(?:env:|file:)[A-Za-z_][A-Za-z0-9_.-]*$') { return $false }
+    if ($t -match '(?i)^https?://\S+$') { return $false }
+    if ($t -match '(?i)^(?:none|null|true|false|undefined|n/?a)$') { return $false }
+    if (-not ($t -cmatch '^[A-Z_][A-Z0-9_]*$')) { if ($t.Length -lt 16) { return $false } }  # "[UNK]", "[PAD]", short tokens; -cmatch = case-SENSITIVE (plain -match is CI in PS): mixed-case alnum values must stay live
+    if ($t -cmatch '^[A-Z_][A-Z0-9_]*$') { return $false }                   # "DASHSCOPE_API_KEY" style env var NAME (exact case; -cmatch)
+    return ($t -match '^[A-Za-z0-9_\-/+=:.@#$%^&*!~]{16,}$')                  # long opaque blob
+}
+
+# v23 (t_d37fca26): exact credential FIELD-NAME allowlist. The v21
+# `.*_?token` / `.*_?secret` suffix match hit ANY word ending in
+# "token" (unk_token, pad_token, cls_token in every HuggingFace
+# tokenizer.json). The whole field name must now be one of these.
+# (Kept as a literal inside Invoke-CredentialSweep so the function
+# stays self-contained for the selfcheck harness.)
+$script:LiveFieldNameRe = '(?i)^(api_?key(?!env)|access_?token|auth_?token|id_?token|refresh_?token|session_?token|client_?secret|secret|secret_?key|api_?secret|app_?secret|consumer_?secret|shared_?secret|password|user_?password|admin_?password|passwd|passphrase|private_?key|credential|credentials|authorization|auth)$'
+
+# v23 (t_d37fca26): model/tokenizer artifacts are NEVER credential
+# files, by name. tokenizer.json/vocab/merges/special_tokens_map
+# etc. always carry unk_token/pad_token string fields; onnx is
+# binary (also skipped by the NUL heuristic, this is belt+suspenders).
+$script:ModelArtifactNameRe = '(?i)^(tokenizer|tokenizer_config|vocab|special_tokens_map|added_tokens|merges)\.(json|txt|bin)$|^(spiece|sentencepiece)\.(model|bin)$|\.onnx(\.data)?$'
+
 function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
     $skPattern = '(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}'
-    $liveFieldRe = '(?i)^(api_?key(?!env)|.*_?token|.*_?secret|.*_?credential|.*_?password)$'
+    $liveFieldRe = if ($script:LiveFieldNameRe) { $script:LiveFieldNameRe } else { '(?i)^(api_?key(?!env)|access_?token|auth_?token|id_?token|refresh_?token|session_?token|client_?secret|secret|secret_?key|api_?secret|app_?secret|consumer_?secret|shared_?secret|password|user_?password|admin_?password|passwd|passphrase|private_?key|credential|credentials|authorization|auth)$' }
+    $modelArtifactRe = if ($script:ModelArtifactNameRe) { $script:ModelArtifactNameRe } else { '(?i)^(tokenizer|tokenizer_config|vocab|special_tokens_map|added_tokens|merges)\.(json|txt|bin)$|^(spiece|sentencepiece)\.(model|bin)$|\.onnx(\.data)?$' }
     $script:credFindings = @()
     $sweepStack = New-Object System.Collections.Stack
     $sweepStack.Push((Get-Item -LiteralPath $Root -Force))
@@ -2249,8 +2398,14 @@ function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
             # contain non-secret "tokens"/"token" fields (e.g.
             # typescript's "@esfx/canceltoken" deps) that would
             # hard-fail every install. Config-ish files only.
+            # v23 (t_d37fca26): model/tokenizer artifacts (incl.
+            # tokenizer.json) are skipped by NAME -- their
+            # unk_token/pad_token fields are symbolic tokens, never
+            # secrets, and the field-name regex alone would still
+            # string-match nested ids.
             $isManifest = $child.Name -match '(?i)^(package|package-lock|npm-shrinkwrap)\.json$'
-            if ($child.Extension -eq ".json" -and -not $isManifest) {
+            $isModelArtifact = $child.Name -match $modelArtifactRe
+            if ($child.Extension -eq ".json" -and -not $isManifest -and -not $isModelArtifact) {
                 try {
                     $obj = $text | ConvertFrom-Json -ErrorAction Stop
                     $script:badLeaves = @()
@@ -2263,7 +2418,12 @@ function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
                             return
                         }
                         foreach ($p in $node.PSObject.Properties) {
-                            if ($p.Value -is [string] -and $p.Name -match $liveFieldRe -and ([string]$p.Value).Trim() -ne "") {
+                            # v23: BOTH the field NAME (exact credential
+                            # allowlist, above) AND the VALUE (secret
+                            # SHAPE, Test-SecretValue) must qualify --
+                            # unk_token="..." fails the name check, and
+                            # short/ symbolic values fail the shape check.
+                            if ($p.Value -is [string] -and $p.Name -match $liveFieldRe -and (Test-SecretValue ([string]$p.Value))) {
                                 $script:badLeaves += $p.Name
                             } elseif (-not ($p.Value -is [string])) {
                                 & $walkCfg $p.Value
@@ -3438,6 +3598,89 @@ function Install-NodeRuntime([string]$InstallDir) {
 # v16: offline wrapper. Install-PythonRuntime's normal entry reuses an
 # existing runtime or throws; offline callers need a NULL return when
 # no local source works (the caller prints the tried-sources error).
+function Invoke-AppBuild([string]$InstallDir, [string]$NodeExe) {
+    # v24 (t_ab909828): the app's launch-critical artifacts are BUILD
+    # PRODUCTS, not repo content: .gitignore excludes dist/ (line 2)
+    # and electron/ui/ (line 26), so a clone/zip source has neither.
+    # electron/main.ts loads electron/ui/index.html and the CodeAgent.bat
+    # launcher needs dist/electron/main.js -- without a build the app
+    # opens to a black window. This function makes the installer
+    # produce them itself. Uses the install tree's OWN Node
+    # (<InstallDir>\runtime\node -- prepended to PATH), never a system
+    # Node. npm registry / electron binary both pinned to npmmirror.
+    # $NodeExe may be $null (NoNode / failed bootstrap): then try PATH
+    # as a fallback; if that also has no node, we throw.
+    $nodeDir = $null
+    if ($NodeExe -and (Test-Path -LiteralPath $NodeExe)) {
+        $nodeDir = Split-Path -Parent $NodeExe
+        $env:PATH = "$nodeDir;$env:PATH"
+    } elseif (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        throw @"
+[install] build needs Node/npm but none is available.
+FIX (pick one):
+  - re-run WITHOUT -NoNode so the installer bootstraps its own Node into <InstallDir>\runtime\node
+  - lay node.exe yourself at <InstallDir>\runtime\node\node.exe and re-run
+  - pass -SkipBuild (the installed app will NOT start until you build it manually)
+"@
+    }
+    $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue)
+    if ($npmCmd) { Write-Host "[install] build using npm from: $($npmCmd.Source)" }
+
+    $env:npm_config_registry = "https://registry.npmmirror.com"
+    $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+
+    # 1) npm install at the install root (deps + electron binary).
+    #    Skipped when node_modules\electron is already there AND the
+    #    prior copy verified -- the electron binary download is the
+    #    slow part and a copied one is already complete.
+    $electronExe = Join-Path $InstallDir "node_modules\electron\dist\electron.exe"
+    if (Test-Path -LiteralPath $electronExe) {
+        Write-Host "[install] build: node_modules\electron\dist\electron.exe already present -- skipping 'npm install' at root"
+    } else {
+        Invoke-Step "npm install (app root; registry=npmmirror, ELECTRON_MIRROR set)" {
+            Push-Location $InstallDir
+            try {
+                npm install --no-audit --no-fund
+                if ($LASTEXITCODE -ne 0) { throw "[install] npm install failed at app root (rc=$LASTEXITCODE) -- no network? try -Offline + -SkipBuild or fix the mirror" }
+            } finally { Pop-Location }
+            $global:LASTEXITCODE = 0
+        }
+    }
+
+    # 2) npm run build -> dist/electron/*.js + electron/renderer.bundle.js
+    $mainJs = Join-Path $InstallDir "dist\electron\main.js"
+    if ((Test-Path -LiteralPath $mainJs) -and (Test-Path -LiteralPath (Join-Path $InstallDir "electron\renderer.bundle.js"))) {
+        Write-Host "[install] build: dist\electron\main.js + electron\renderer.bundle.js already present -- skipping 'npm run build'"
+    } else {
+        Invoke-Step "npm run build (tsc + esbuild -> dist\electron\*.js + electron\renderer.bundle.js)" {
+            Push-Location $InstallDir
+            try {
+                npm run build
+                if ($LASTEXITCODE -ne 0) { throw "[install] npm run build failed (rc=$LASTEXITCODE)" }
+            } finally { Pop-Location }
+            $global:LASTEXITCODE = 0
+        }
+    }
+
+    # 3) build the UI and stage ui/dist -> electron/ui (the dir the
+    #    main process actually loads). scripts\build-ui.ps1 does:
+    #    npm --prefix ui install; npm --prefix ui run build
+    #    (tsc -b + vite build); stage; blank .env / config.json (both
+    #    exist already post-install, so it leaves them untouched).
+    $uiIndex = Join-Path $InstallDir "electron\ui\index.html"
+    if (Test-Path -LiteralPath $uiIndex) {
+        Write-Host "[install] build: electron\ui\index.html already present -- skipping scripts\build-ui.ps1"
+    } else {
+        $buildUi = Join-Path $InstallDir "scripts\build-ui.ps1"
+        if (-not (Test-Path -LiteralPath $buildUi)) { throw "[install] build: scripts\build-ui.ps1 not found under the install tree -- source copy incomplete?" }
+        Invoke-Step "building the UI (scripts\build-ui.ps1 -> electron\ui)" {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $buildUi
+            if ($LASTEXITCODE -ne 0) { throw "[install] build-ui.ps1 failed (rc=$LASTEXITCODE) -- UI will be missing; the app window would open BLACK" }
+            $global:LASTEXITCODE = 0
+        }
+    }
+}
+
 function Install-PythonRuntimeOffline([string]$InstallDir) {
     $runtimeDir = Join-Path $InstallDir "runtime"
     $pyDir = Join-Path $runtimeDir "python"
@@ -3525,6 +3768,7 @@ if ($Uninstall) {
     # dir is deleted -- the purge gate below needs it as ownership
     # proof (b)/(c) when the data dir itself carries no marker.
     $Script:UninstallRecordedDataDir = ""
+    $Script:UninstallPurgeFailed = $false
     $recPath = Join-Path $InstallDir ".install-state.json"
     if (Test-PathSafe $recPath) {
         try {
@@ -3534,6 +3778,23 @@ if ($Uninstall) {
     }
     if ($Script:UninstallRecordedDataDir.Trim()) {
         Write-Host "[uninstall] install record says data dir was: $Script:UninstallRecordedDataDir"
+    }
+    # v25 (t_27714fcb): run the -PurgeData gate BEFORE the install
+    # tree is deleted. When the data dir lives OUTSIDE the InstallDir
+    # (explicit -DataDir, or a legacy %APPDATA% install) this changes
+    # nothing: the gate resolves, proves ownership, purges or refuses,
+    # exactly as before. When the data dir lives INSIDE the InstallDir
+    # (the v25 default), skipping -PurgeData no longer silently eats
+    # the data with the tree: the tree delete below removes everything
+    # INCLUDING <InstallDir>\data (the whole directory IS ours -- same
+    # ownership the v22 marker already proves), but a -PurgeData run
+    # first still handles the explicit/external-dir cases explicitly.
+    if ($PurgeData) {
+        $purgeOk = Invoke-PurgeData $DataDir $InstallDir ([bool]$Force)
+        if (-not $purgeOk) { $Script:UninstallPurgeFailed = $true }
+    } else {
+        $dataResolved = Resolve-DataDir $DataDir $InstallDir
+        Write-Host ("[uninstall] data dir kept: {0} (pass -PurgeData to delete it; in-tree data dirs under the install dir are removed with the tree)" -f $dataResolved.DataDir)
     }
     if (Test-PathSafe $InstallDir) { Remove-Item -LiteralPath $InstallDir -Recurse -Force }
     else { Write-Warning "[uninstall] install dir not found: $InstallDir (nothing to remove)" }
@@ -3629,16 +3890,12 @@ Or run it yourself: python-$PythonVersion-amd64.exe /repair /quiet, then python-
     )) {
         if (Test-Path -LiteralPath $lnk) { Remove-Item -LiteralPath $lnk -Force; Write-Host "[uninstall] removed $lnk" }
     }
-    $dataResolved = Resolve-DataDir $DataDir $InstallDir
-    $dataNote = $dataResolved.DataDir
-    if ($PurgeData) {
-        # v17: resolve + ownership-gate + purge in ONE path, using the
-        # SAME resolution rules as the install side. A refused purge
-        # (unproven ownership) or a partial delete keeps exit code 1.
-        $purgeOk = Invoke-PurgeData $DataDir $InstallDir ([bool]$Force)
-        if (-not $purgeOk) { $exitCode = 1 }
-    } else {
-        Write-Host "[uninstall] data dir kept: $dataNote (pass -PurgeData to delete it)"
+    # v25 (t_27714fcb): the -PurgeData gate moved ABOVE the install-dir
+    # delete (it needs the .install-state.json record + the in-tree
+    # data dir to still exist). This is only the failure aggregation.
+    if ($Script:UninstallPurgeFailed) {
+        Write-Host "[uninstall] done WITH ERRORS -- the data dir purge was refused or incomplete (see the REFUSED/INCOMPLETE warning above)."
+        $exitCode = 1
     }
     if ($exitCode -eq 0) {
         Write-Host "[uninstall] done."
@@ -3721,6 +3978,23 @@ FIX (pick one):
 }
 
 $InstallDir = Confirm-InstallDir $InstallDir ([bool]$Force)
+
+# ---------------------------------------------------------------------
+# v25 (t_27714fcb): resolve the DATA dir EARLY, once, for the whole
+# install path. Empty -DataDir (the old default) now means
+# <InstallDir>\data -- the app becomes fully self-contained: logs,
+# sessions.db, audit.db, Chromium profile ALL inside the one
+# movable/deletable tree. An EXPLICIT -DataDir keeps its old meaning
+# exactly (user-chosen location, honored via --user-data-dir +
+# DESK_AGENT_DATA_DIR in the launcher).
+# $Script:DataDirExplicit is consumed by the v22 ownership gate.
+# ---------------------------------------------------------------------
+$Script:DataDirExplicit = [bool]($DataDir -and $DataDir.Trim())
+if (-not $Script:DataDirExplicit) {
+    $DataDir = Join-Path $InstallDir "data"
+}
+$DataDir = [Environment]::ExpandEnvironmentVariables($DataDir)
+Write-Host ("[install] data dir: {0} (source: {1})" -f $DataDir, $(if ($Script:DataDirExplicit) { "explicit -DataDir" } else { "default <InstallDir>\data (v25)" }))
 
 # ---------------------------------------------------------------------
 # v7: resolve the package dir. Default <InstallDir>\packages; an
@@ -3838,7 +4112,7 @@ if ($copyDone) {
         # (observed E:\miniconda3 on the .5 box) -- copied venvs are
         # machine-specific garbage here.
         $rcArgs = @($sourceRoot, $InstallDir, "/E", "/XJ", "/R:2", "/W:2", "/NFL", "/NDL", "/NP")
-        foreach ($s in @("node_modules", ".git", ".install-state.json", "runtime", "codeagent")) {
+        foreach ($s in @("node_modules", ".git", ".install-state.json", "runtime", "codeagent", "data")) {
             $rcArgs += "/XD"; $rcArgs += (Join-Path $sourceRoot $s)
         }
         # v21 (t_69654390): dev-era junk must never reach a user
@@ -3896,7 +4170,13 @@ if ($copyDone) {
             "*.bak", "*.bak-*", "*.backup", "*.old", "*.orig",
             "*credentials*", "*secret*", "*.key", "*.pem",
             ".install-state.json", "*.log", "tsconfig.test.json",
-            "*.pyc", "*.tsbuildinfo"
+            "*.pyc", "*.tsbuildinfo",
+            # v25 (t_27714fcb): the data dir now lives INSIDE the
+            # install tree -- never let the source repo's dev dbs or
+            # the user's own live dbs ride along or get overwritten
+            # by a copy. sessions.db is already EXACT-blacklisted in
+            # the updater; this is the installer-side mirror.
+            "sessions.db", "sessions.db-*", "audit.db", "audit.db-*"
         )) {
             $rcArgs += "/XF"; $rcArgs += $xf
         }
@@ -3912,7 +4192,7 @@ if ($copyDone) {
         "node_modules", ".git", "runtime", ".install-state.json", "codeagent",
         ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".coverage",
         "htmlcov", ".cache", "tests", "test", "__pycache__",
-        ".nyc_output", "coverage", "backups", "docs", ".github", ".venv"
+        ".nyc_output", "coverage", "backups", "docs", ".github", ".venv", "data"
     )
     $srcStats = Get-TreeStats $sourceRoot $copyExcludes
     $dstStats = Get-TreeStats $InstallDir $copyExcludes
@@ -3950,7 +4230,9 @@ if ((Test-Path -LiteralPath $srcNodeModules) -and -not (Test-Path -LiteralPath $
     $nmDstStats = Get-TreeStats $dstNodeModules @()
     Assert-CopySanity $nmSrcStats $nmDstStats "node_modules copy"
 } elseif (-not (Test-Path -LiteralPath $srcNodeModules)) {
-    Write-Warning "[install] source has no node_modules -- target machine will need 'npm install' before first launch"
+    # v24: the build stage below will 'npm install' into the target, so
+    # this is informational only (it used to mean "the app won't run").
+    Write-Host "[install] source has no node_modules -- the build stage will run 'npm install' on the target"
 }
 
 # ---------------------------------------------------------------------------
@@ -4241,21 +4523,103 @@ if (-not $NoNode) {
 }
 
 # ---------------------------------------------------------------------------
+# step 2d+: BUILD (v24, t_ab909828). The app's launch-critical files are
+# gitignored build products, not repo content; the old installer only
+# WARNED "target machine will need 'npm install' before first launch"
+# and finished green -- the user then got a BLACK WINDOW (loadFile of a
+# nonexistent electron\ui\index.html). Online installs now BUILD the
+# three artifacts themselves, with the installer's own Node. A failed
+# build is a HARD failure (with the manual remedy). -SkipBuild and
+# -Offline skip the build but say plainly that the installed app will
+# NOT start as-is.
+# ---------------------------------------------------------------------------
+$Script:BuiltOk = $false
+if ($SkipBuild -or $Offline) {
+    $why = if ($SkipBuild) { "-SkipBuild" } else { "-Offline" }
+    # NOTE: "${why}:" not "$why:" -- inside a double-quoted string a bare
+    # $why: is parsed as a SCOPED variable reference and PS 5.1 dies.
+    Write-Warning "[install] ${why}: skipping the app build (dist\ + electron\ui\ will NOT be produced)."
+    Write-Warning "[install] ${why}: the installed app WILL NOT START as-is (it opens to a black window) until you build it:"
+    Write-Warning "[install] ${why}:   cd $InstallDir"
+    Write-Warning "[install] ${why}:   npm install (needs Node; npmmirror registry/ELECTRON_MIRROR recommended)"
+    Write-Warning "[install] ${why}:   npm run build"
+    Write-Warning "[install] ${why}:   powershell -ExecutionPolicy Bypass -File scripts\build-ui.ps1"
+} elseif ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
+    Invoke-AppBuild $InstallDir $nodeExe
+    $Script:BuiltOk = $true
+} else {
+    # node bootstrap failed / -NoNode: still TRY the build with any
+    # system npm; if there is none, this throws with the FIX list.
+    Invoke-AppBuild $InstallDir $null
+    $Script:BuiltOk = $true
+}
+
+# v24 (t_ab909828): HARD final gate. The launcher (CodeAgent.bat) runs
+# electron.exe with dist\electron\main.js and the main process loads
+# electron\ui\index.html. Any of the three missing -> the app is dead
+# (black window / npm start fallback that also fails). The install
+# must FAIL, not warn -- the field incident was exactly a "green"
+# install of a non-starting app.
+$artifacts = @(
+    @{ Path = Join-Path $InstallDir "dist\electron\main.js";  What = "compiled Electron main (npm run build)" },
+    @{ Path = Join-Path $InstallDir "electron\ui\index.html"; What = "staged UI (scripts\build-ui.ps1)" },
+    @{ Path = Join-Path $InstallDir "node_modules\electron\dist\electron.exe"; What = "Electron runtime binary" }
+)
+$missing = @($artifacts | Where-Object { -not (Test-Path -LiteralPath $_.Path) })
+if ($missing.Count -gt 0) {
+    $lines = ($missing | ForEach-Object { "  - $($_.Path)  ($($_.What))" }) -join "`n"
+    throw @"
+[install] ARTIFACT CHECK FAILED -- install not completed. Missing launch-critical file(s):
+$lines
+The app would open to a BLACK WINDOW with these absent. FIX (run inside $InstallDir, needs Node):
+  npm install
+  npm run build
+  powershell -ExecutionPolicy Bypass -File scripts\build-ui.ps1
+then re-run this installer (idempotent) to refresh the launcher/shortcuts.
+"@
+}
+foreach ($a in $artifacts) { Write-Host "[install] artifact OK: $($a.Path)" }
+
+# ---------------------------------------------------------------------------
 # step 3: launcher CodeAgent.bat (%~dp0-relative, no drive letters)
 # ---------------------------------------------------------------------------
 $bat = Join-Path $InstallDir "CodeAgent.bat"
 Invoke-Step "writing launcher $bat" {
-    # Prefer the bundled electron.exe directly: the compiled main
-    # (dist/electron/main.js) ships in the repo, so no Node/tsc needed
-    # at runtime. Fall back to `npm start` if electron.exe is absent.
+    # Prefer the bundled electron.exe directly: no Node needed at
+    # launch. The compiled main (dist\electron\main.js) and the
+    # staged UI (electron\ui\index.html) are BUILD PRODUCTS -- the
+    # repo gitignores BOTH (lines 2 and 26), so the v24 installer
+    # BUILDS them itself (Invoke-AppBuild) and hard-fails if any
+    # is missing (the artifact gate above). The old claim that
+    # main.js being repo content was FALSE (field incident
+    # 2026-10-13: black window on a fresh clone install).
     # If a private node runtime was installed, prepend its dir to PATH
     # for this process only, so the npm fallback and any future `npm`
     # usage work without a system Node. (Field-tested in v1 WITHOUT
     # this block; the block itself is new in v2 -- NOT field-tested.)
-    $dataArg = ""
-    if ($DataDir) {
-        $dataArg = ' --user-data-dir="' + ([Environment]::ExpandEnvironmentVariables($DataDir)) + '"'
+    # v25 (t_27714fcb): TWO data switches, split per the task comment:
+    #   --user-data-dir  -> Chromium profile dir (Cache/Network/
+    #                      Preferences). Explicit -DataDir -> exactly
+    #                      that dir (v1..v24 semantics). Default ->
+    #                      <InstallDir>\userdata (NOT \data: avoids the
+    #                      data\data double-nesting -- Electron would
+    #                      otherwise put the sidecar data under
+    #                      <userData>\data).
+    #   DESK_AGENT_DATA_DIR -> sidecar data (logs/sessions.db/audit.db
+    #                      /memory/runs/attachments) in the
+    #                      RESOLVED data dir. electron/main.ts (v24)
+    #                      now respects an inherited value; only when
+    #                      absent does it fall back to <userData>\data
+    #                      (legacy %APPDATA% installs keep working).
+    # Both are %~dp0-relative when the data dir is the in-tree default
+    # -- so moving the whole install directory needs no launcher edit.
+    $resolvedData = [Environment]::ExpandEnvironmentVariables($DataDir)
+    $userProfileArg = ' --user-data-dir="%~dp0userdata"'
+    if ($Script:DataDirExplicit) {
+        $userProfileArg = ' --user-data-dir="' + $resolvedData + '"'
     }
+    # The env var is a single set "..." line, shared by both branches.
+    $envDataLine = 'set "DESK_AGENT_DATA_DIR=' + $resolvedData + '"'
     # NOTE: PowerShell 5.1 array literals can split a `'str' + $var`
     # element into TWO elements. Observed on a real Windows box: the
     # switch landed on its own line in the .bat, which silently broke
@@ -4265,12 +4629,13 @@ Invoke-Step "writing launcher $bat" {
     if ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
         $pathSetup = 'set "PATH=%~dp0runtime\node;%PATH%"'
     }
-    $electronLine = '  "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."' + $dataArg
-    $npmLine = '  call npm start --' + $dataArg
+    $electronLine = '  "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."' + $userProfileArg
+    $npmLine = '  call npm start --' + $userProfileArg
     $lines = @(
         "@echo off",
         'cd /d "%~dp0"',
         $pathSetup,
+        $envDataLine,
         'if exist "%~dp0node_modules\electron\dist\electron.exe" (',
         $electronLine,
         ') else (',
@@ -4284,6 +4649,9 @@ Invoke-Step "writing launcher $bat" {
     $written = @(Get-Content -LiteralPath $bat)
     if ($written -notcontains $electronLine) {
         throw "launcher self-check failed: electron line not written verbatim ($bat)"
+    }
+    if ($written -notcontains $envDataLine) {
+        throw "launcher self-check failed: DESK_AGENT_DATA_DIR line not written verbatim ($bat)"
     }
     foreach ($l in $written) {
         if ($l -match '--user-data-dir' -and $l -notmatch 'electron\.exe|npm start') {
@@ -4386,6 +4754,18 @@ if ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
 }
 if ($Script:CacheDir) {
     Write-Host "  package caches: $Script:CacheDir (pip\, npm\ -- inside the install tree; deleting/moving the whole directory leaves no machine residue)"
+}
+# v24 (t_ab909828): the build state and the UI artifact path are part of
+# the completion report (field incident: "green" install, black window,
+# nobody could tell whether anything had been built).
+if ($Script:BuiltOk) {
+    Write-Host "  built:       YES -- dist\electron\main.js + electron\renderer.bundle.js + electron\ui\index.html"
+    Write-Host "  UI:          $InstallDir\electron\ui\index.html"
+} elseif ($SkipBuild -or $Offline) {
+    Write-Host "  built:       NO (-SkipBuild/-Offline) -- the app WILL NOT START until you build it (see warnings above)"
+    Write-Host "  UI:          (absent -- build with scripts\build-ui.ps1)"
+} else {
+    Write-Host "  built:       ??? (internal error -- BuildOk unset without SkipBuild/Offline; report this)"
 }
 Write-Host "  launch:      double-click $bat or the Start Menu / Desktop shortcut"
 if ($cfgIsBlank) {
