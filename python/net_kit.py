@@ -45,7 +45,6 @@ __all__ = [
     "CONNECT_TIMEOUT_CAP",
     "HTTP_TIMEOUT_SECONDS",
     "SLOW_RPC_LOG_SECONDS",
-    "MAX_BODY_BYTES",
     "connect_prefer_ipv4",
     "build_ipv4_first_opener",
     "describe_timeouts",
@@ -72,8 +71,8 @@ CONNECT_TIMEOUT_CAP = CONNECT_TIMEOUT_SECONDS
 HTTP_TIMEOUT_SECONDS = _env_seconds("DESK_AGENT_HTTP_TIMEOUT", 15.0)
 #: 超过这个秒数算"慢请求"，必须留日志。
 SLOW_RPC_LOG_SECONDS = _env_seconds("DESK_AGENT_SLOW_RPC_SECONDS", 2.0)
-#: 单次响应体上限（防呆）：模型列表这种 JSON 远小于这个数。
-MAX_BODY_BYTES = int(_env_seconds("DESK_AGENT_MAX_BODY_MB", 4.0) * (1 << 20))
+#: 响应体上限只由调用方按用途决定（例如取模型列表 capped read），
+#: 本模块不预读响应体 —— 聊天是流式的，预读会破坏流式语义。
 
 
 def describe_timeouts() -> str:
@@ -173,30 +172,51 @@ class _PinnedPlainConnection(http.client.HTTPConnection):
         self.sock = self._pinned_sock
 
 
-class _Response:
-    """urllib 风格的轻量响应：.status/.read()/上下文管理器/close()。"""
+class _LiveResponse:
+    """活着读的响应对象 —— 与 urllib 的 HTTPResponse 同款接口。
 
-    def __init__(self, status: int, reason: str, headers, body: bytes) -> None:
-        self.status = status
-        self.reason = reason
-        self.headers = headers
-        self._body = body
-        self._read = False
+    为什么不把响应体先读出来：聊天走 SSE 流式（``for raw in resp`` 逐行取
+    data: 行），预读会把"流式"变成"憋完整段再吐"——长回答看起来卡住，还会
+    撞超时。所以这里保留 http.client 的响应对象，只做薄包装：
+    read / readline / 迭代 / 上下文管理器 / 关闭时连带关掉连接。
+
+    Host 与 TLS SNI 都用逻辑域名，证书校验口径与 urllib 一致。
+    """
+
+    def __init__(self, conn, resp, url: str) -> None:
+        self._conn = conn
+        self._resp = resp
+        self.url = url
+        self.status = resp.status
+        self.reason = resp.reason
+        self.headers = resp.headers
+        self._closed = False
 
     def read(self, amount: int = -1) -> bytes:
-        if self._read:
-            return b""
-        self._read = True
-        return self._body if amount is None or amount < 0 else self._body[:amount]
+        return self._resp.read(amount)
 
-    def info(self):                                # pragma: no cover - 兼容层
+    def readline(self, size: int = -1) -> bytes:
+        return self._resp.readline(size)
+
+    def __iter__(self):
+        # HTTPResponse.__iter__ 逐行产出（SSE 就靠这个）
+        return iter(self._resp)
+
+    def info(self):
         return self.headers
 
-    def getcode(self) -> int:                      # pragma: no cover - 兼容层
+    def getcode(self) -> int:
         return self.status
 
     def close(self) -> None:
-        return None
+        if self._closed:
+            return
+        self._closed = True
+        for closer in (self._resp.close, self._conn.close):
+            try:
+                closer()
+            except Exception:                      # pragma: no cover - 防御
+                pass
 
     def __enter__(self):
         return self
@@ -208,28 +228,33 @@ class _Response:
 
 def _exchange(host: str, port: int, sock, request, timeout: float,
               use_tls: bool):
-    """在已连接的 socket 上跑一次 HTTP/1.1 往返，返回响应对象。"""
+    """在已连接的 socket 上发起请求，返回**活着的**响应对象（不预读）。"""
     conn = (_PinnedTLSConnection(host, sock, timeout) if use_tls
             else _PinnedPlainConnection(host, port, sock, timeout))
     headers = {k: v for k, v in request.header_items()
                if k.lower() != "host"}
+    url = getattr(request, "full_url", "") or ""
     try:
         conn.request(request.get_method() or "GET", request.selector or "/",
                      body=request.data, headers=headers)
         resp = conn.getresponse()
-        status, reason, resp_headers = resp.status, resp.reason, resp.headers
-        body = resp.read(MAX_BODY_BYTES + 1)
-        if len(body) > MAX_BODY_BYTES:
-            raise OSError("response larger than %d bytes" % MAX_BODY_BYTES)
-    finally:
+    except Exception:
         try:
             conn.close()
         except Exception:                          # pragma: no cover - 防御
             pass
-    if status >= 400:
-        raise urllib.error.HTTPError(request.full_url, status, reason,
-                                     resp_headers, None)
-    return _Response(status, reason, resp_headers, body)
+        raise
+    if resp.status >= 400:
+        # 与 urllib 行为一致：4xx/5xx 抛 HTTPError，错误体挂在 fp 上
+        try:
+            raise urllib.error.HTTPError(url, resp.status, resp.reason,
+                                         resp.headers, resp)
+        finally:
+            try:
+                conn.close()
+            except Exception:                      # pragma: no cover - 防御
+                pass
+    return _LiveResponse(conn, resp, url)
 
 
 def build_ipv4_first_opener(connect_fn=None, http_open=None):
