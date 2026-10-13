@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { AppProvider, useApp } from './state/store';
+import { AppProvider, useApp, NEW_PROJECT_TITLE } from './state/store';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { StatusBar } from './components/StatusBar';
@@ -13,7 +13,7 @@ import { SettingsSurface } from './pages/SettingsSurface';
 import './styles/app.css';
 
 function Shell() {
-  const { view, setView, createSession } = useApp();
+  const { view, setView, createSession, createProjectSession } = useApp();
 
   // Esc is the way out of anything that replaced the chat. When a text field
   // has focus the first Esc only blurs it, so a half-typed model / API-key
@@ -26,6 +26,14 @@ function Shell() {
         if (document.querySelector('[role="dialog"]')) return;
         e.preventDefault();
         createSession();
+        return;
+      }
+      // 新建项目（侧栏按钮上印 Ctrl+P，2026-10-09 用户要求补上）。
+      // 不弹表单：建好项目会话就直接进对话，流程自己问「新建还是接入现有的」。
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
+        if (document.querySelector('[role="dialog"]')) return;
+        e.preventDefault();
+        createProjectSession({ projectName: NEW_PROJECT_TITLE });
         return;
       }
       // 审批卡现在在消息流里，不需要（也不该）用 Esc「关掉」它。
@@ -50,7 +58,7 @@ function Shell() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [view, setView, createSession]);
+  }, [view, setView, createSession, createProjectSession]);
 
   return (
     <div className="app-frame">

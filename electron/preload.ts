@@ -211,8 +211,16 @@ const api = {
     }): Promise<{ id: string; title: string }> {
       return ipcRenderer.invoke("agent:sessionCreate", payload) as Promise<{ id: string; title: string }>;
     },
-    async rename(sessionId: string, title: string): Promise<unknown> {
-      return ipcRenderer.invoke("agent:sessionRename", { sessionId, title });
+    /**
+     * Rename a session. `source` (t_d0683b3f): 'user' marks a real user
+     * rename (the engine then never overwrites the title); omitted means an
+     * automatic client sync, which must NOT lock the title — previously every
+     * rename was tagged user server-side, permanently disabling auto titles.
+     */
+    async rename(sessionId: string, title: string, opts?: { source?: 'user' | 'project' }): Promise<unknown> {
+      const payload: Record<string, unknown> = { sessionId, title };
+      if (opts && (opts.source === 'user' || opts.source === 'project')) payload.source = opts.source;
+      return ipcRenderer.invoke("agent:sessionRename", payload);
     },
     /** Partial update of a project session's project fields (contract v1 §1.2).
      *  Only the keys present in `patch` are changed; the response is the full row. */

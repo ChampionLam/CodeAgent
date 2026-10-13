@@ -52,6 +52,15 @@ import os
 import re
 from typing import NamedTuple
 
+
+def _log_internal(msg: str) -> None:
+    """内部日志出口（数值/阈值只进这里，不进用户可见的 reason）。"""
+    try:
+        import logging_kit
+        logging_kit.get_logger().log("info", msg, source="guard")
+    except Exception:
+        pass
+
 # 命令位：行首、命令分隔符之后、子 shell 内、sudo/env/exec 之类包装器之后。
 _CMDPOS = r"(?:^|[;&|]|\|\||&&|\$\(|`|\bsudo\s+|\benv\s+|\bexec\s+|\(\s*)\s*"
 
@@ -372,15 +381,21 @@ def judge_command_layered(command: str, *, model=None,
     p = float(out.get("p", 0.0))
     action = _model_action(p, thresholds)
     if action == "block_confident":
+        # t_87ce5f71：面向用户的文案不许带内部术语（弹卡/校准/p=…/阈值），
+        # 数值细节只进内部日志（日志里叫弹卡没问题）。
+        _log_internal(
+            "模型提示层：校准弹卡概率 p=%.3f ≥ %.2f（高置信危险），已拦截待确认"
+            % (p, thresholds["confident"]))
         return Verdict(True, "dangerous", "model-block",
-                       "模型提示层：校准弹卡概率 p=%.3f ≥ %.2f，模型高置信"
-                       "危险（模型很确定），建议弹卡确认"
-                       % (p, thresholds["confident"]))
+                       "检测到可疑命令执行（危险等级：高）。这条命令可能改动"
+                       "系统文件或从网络下载内容，确认后才会执行")
     if action == "block":
+        _log_internal(
+            "模型提示层：校准弹卡概率 p=%.3f 落在不确定带（%.2f–%.2f），"
+            "安全优先，已拦截待确认" % (p, thresholds["ask"], thresholds["confident"]))
         return Verdict(True, "dangerous", "model-block",
-                       "模型提示层：校准弹卡概率 p=%.3f 落在不确定带"
-                       "（%.2f–%.2f），模型没把握但安全优先，建议弹卡确认"
-                       % (p, thresholds["ask"], thresholds["confident"]))
+                       "检测到可疑命令执行（危险等级：中）。无法完全排除"
+                       "风险，确认后才会执行")
     return Verdict(False, "", "",
                    "模型校准弹卡概率 p=%.3f < %.2f（放行，记入未知池回流）"
                    % (p, thresholds["ask"]))
@@ -545,5 +560,12 @@ def judge(tool_name: str, args: dict | None) -> Verdict:
                 return Verdict(True, "dangerous", "credential-path",
                                "碰到凭证位置：%s" % _arg_path(args))
         return Verdict(False, "", "", "")
+
+    # MCP 工具（mcp_* 前缀）：高风险外挂工具，一律走审批（design §2.3 的
+    # mcp_default_ask：外挂 server 的能力边界不受我们控制，宁可问一次）。
+    # P1 再按 server 细化信任档位。
+    if tool_name.startswith("mcp_"):
+        return Verdict(True, "dangerous", "mcp_default_ask",
+                       "MCP 外部工具调用（%s）——首次使用需要确认" % tool_name)
 
     return Verdict(False, "", "", "")

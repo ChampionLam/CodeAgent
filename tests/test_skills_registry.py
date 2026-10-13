@@ -14,6 +14,7 @@ import skills_registry  # noqa: E402
 SKILL = """---
 name: {name}
 description: {description}
+when_to_use: 需要时
 {extra}---
 
 # 标题
@@ -60,10 +61,22 @@ class ParseTest(RegistryTestCase):
         self.assertNotIn("---", skill.body)
         self.assertNotIn("name:", skill.body)
 
-    def test_when_to_use_is_optional(self):
-        self.write("beta", SKILL.format(name="beta", description="没有触发条件", extra=""))
+    def test_missing_when_to_use_is_skipped_with_a_reason(self):
+        # 2026-10-12 起触发条件必填：缺 when_to_use 的 skill 记 skipped，不挡启动。
+        text = SKILL.format(name="beta", description="没有触发条件", extra="").replace(
+            "when_to_use: 需要时\n", "")
+        self.write("beta", text)
         skills_registry.scan()
-        self.assertIsNone(skills_registry.get_skill("beta").when_to_use)
+        self.assertIsNone(skills_registry.get_skill("beta"))
+        self.assertIn("when_to_use", skills_registry.skipped()[0][1])
+
+    def test_oversize_file_is_skipped_with_a_reason(self):
+        text = SKILL.format(name="huge", description="超限", extra="") + "水" * (
+            skills_registry.MAX_SKILL_FILE_BYTES)
+        self.write("huge", text)
+        skills_registry.scan()
+        self.assertIsNone(skills_registry.get_skill("huge"))
+        self.assertIn("MAX_SKILL_FILE_BYTES", skills_registry.skipped()[0][1])
 
     def test_missing_description_is_skipped_with_a_reason(self):
         self.write("gamma", "---\nname: gamma\n---\n\n正文\n")
@@ -80,7 +93,7 @@ class ParseTest(RegistryTestCase):
         self.assertIn("frontmatter", skills_registry.skipped()[0][1])
 
     def test_quotes_are_stripped(self):
-        self.write("q", '---\nname: "quoted"\ndescription: \'带引号\'\n---\n\n正文\n')
+        self.write("q", '---\nname: "quoted"\ndescription: \'带引号\'\nwhen_to_use: 需要时\n---\n\n正文\n')
         skills_registry.scan()
         skill = skills_registry.get_skill("quoted")
         self.assertEqual(skill.description, "带引号")

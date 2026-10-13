@@ -337,6 +337,9 @@ class SessionStore:
         skills_v = _clean_json_list(project_skills)
         files_v = _clean_json_list(project_files)
         sid = session_id or uuid.uuid4().hex
+        # 标题落库前剥一次「二次转义」：上游若把 \uXXXX 字面串当标题送来，
+        # 这里还原成真实文本（t_d0683b3f，详见 _decode_escaped_title）。
+        title = _decode_escaped_title(title)
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
@@ -410,9 +413,12 @@ class SessionStore:
 
     def rename_session(self, session_id: str, title: str,
                        source: str | None = None) -> None:
-        """改标题。source: 'user'（界面 sessions.rename，用户意图，引擎之后
-        不得再覆盖）/ 'project'（项目名推成标题，同用户意图）/ None = 保持
-        原 title_source 不动（兼容老调用方）。"""
+        """改标题。source: 'user'（界面 sessions.rename 且显式带
+        source='user'，用户意图，引擎之后不得再覆盖）/ 'project'（项目名
+        推成标题，同用户意图）/ None = 保持原 title_source 不动（兼容老
+        调用方；客户端自动同步的标题走这条，t_d0683b3f）。"""
+        # 标题落库前剥一次「二次转义」（t_d0683b3f）。
+        title = _decode_escaped_title(title)
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
@@ -1003,6 +1009,29 @@ class SessionStore:
 def _has_table_row(conn: sqlite3.Connection, table: str, key: str) -> bool:
     row = conn.execute("SELECT 1 FROM %s WHERE id=?" % table, (key,)).fetchone()
     return row is not None
+
+
+# ---------------------------------------------------------------------------
+# 标题二次转义防御（t_d0683b3f，真机 s_1791826625478 复现）
+#
+# 某条上游链路曾把「JSON 转义后的串」当真实标题写进来：库里 title 存的是
+# 字面 \uXXXX 文本（hex 5c 75 开头），界面显示的也就是这串转义符。任何
+# 写标题的路径落库前都过 _decode_escaped_title：仅当串里所有反斜杠都是
+# \uXXXX 转义（其余是普通字符）时才解码成真实文本；含其它反斜杠的正常
+# 文本（Windows 路径等）原样返回，不会被误伤。
+# ---------------------------------------------------------------------------
+_TITLE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _decode_escaped_title(title):
+    """把整串 \\uXXXX 转义还原成真实文本；不是这种形态就原样返回。"""
+    if not isinstance(title, str) or "\\u" not in title:
+        return title
+    residue = _TITLE_ESCAPE_RE.sub("", title)
+    if "\\" in residue:
+        return title                        # 还有别的反斜杠用法：不敢动
+    return _TITLE_ESCAPE_RE.sub(
+        lambda m: chr(int(m.group(1), 16)), title)
 
 
 def title_from_messages(messages: list[dict]) -> str:

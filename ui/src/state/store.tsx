@@ -1504,7 +1504,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // state（实测：库里 title 一直停在「新项目」，重启就露馅）。这里等桥一趟，
     // 改名当刻就落库。
     if (patch.projectName && patch.projectName.trim()) {
-      void repoRef.current?.rename?.(sessionId, patch.projectName.trim());
+      // 项目名做标题 = 用户意图（t_d37f5d060 的 'project' 口径，t_d0683b3f
+      // 显式带 source，锁住不被自动标题覆盖）。
+      void repoRef.current?.rename?.(sessionId, patch.projectName.trim(), { source: 'project' });
     }
   }, []);
 
@@ -1517,7 +1519,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       prev.map(s => (s.id === id ? { ...s, title: clean } : s))
     );
     // 手改的标题也别只存在内存里：直接推一次，落库不靠 debounce。
-    void repoRef.current?.rename?.(id, clean)?.catch?.(() => {});
+    // source:'user'（t_d0683b3f）：这是用户在界面上真的改了名，服务端据此
+    // 锁定 title_source，引擎的自动标题从此不再覆盖它。
+    void repoRef.current?.rename?.(id, clean, { source: 'user' })?.catch?.(() => {});
     persistImmediate(id);
   }, []);
 

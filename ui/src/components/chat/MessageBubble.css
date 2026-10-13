@@ -300,6 +300,27 @@
   width: 100%;
   max-width: min(100%, 760px);
 }
+
+/* 项目会话的开场：把那句话渲染成一条真的助手消息，快捷选项就排在它下面，
+   看着是「它问完顺手给了三个入口」，不是一块标题卡片（2026-10-09 用户口径）。 */
+.chatarea__greeting-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 18px 52px;   /* 与消息气泡的正文左对齐（头像列宽 52px） */
+  max-width: min(100%, 760px);
+}
+
+/* 流程在等"打字回答"的步骤：一句说明 + 可选的「跳过」。 */
+.flow-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 18px 52px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.flow-hint .chatarea__suggestion { margin-left: 2px; }
 .chatarea__suggestion {
   display: flex;
   align-items: center;

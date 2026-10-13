@@ -298,3 +298,47 @@ test("a full happy-path sequence ends in a coherent state", () => {
   assert.equal(s.lastError, null);
   assert.deepEqual(s.stats, { rounds: 2, toolCallsRun: 1 });
 });
+/* --------------------------------------------------- chat.heal (P0-5 自愈) */
+
+test("chat.heal 挂到助手消息上，链路字段齐全", () => {
+  let s = started();
+  s = reduceEvent(s, "chat.delta", { text: "我来修" });
+  s = reduceEvent(s, "chat.heal", {
+    trigger: "auto",
+    outcome: {
+      kind: "tool_failure", code: "MODULE_NOT_FOUND", stage: "verified",
+      diagnosis: "util 模块缺失",
+      action: { file: "demo.py", explanation: "内联缺失依赖" },
+      verified: true, applied: true,
+      failureReason: "", rollbackReason: "",
+    },
+  });
+  const a = lastAssistant(s);
+  assert.ok(a && a.heal);
+  assert.equal(a.heal!.trigger, "auto");
+  assert.equal(a.heal!.kind, "tool_failure");
+  assert.equal(a.heal!.stage, "verified");
+  assert.equal(a.heal!.verified, true);
+  assert.equal(a.heal!.applied, true);
+  assert.equal(a.heal!.file, "demo.py");
+  // 原有流式行为不受影响
+  assert.equal(a.content, "我来修");
+  assert.equal(s.streaming, true);
+});
+
+test("chat.heal 回滚报告同样可渲染（缺 action 字段不炸）", () => {
+  let s = started();
+  s = reduceEvent(s, "chat.heal", {
+    trigger: "manual",
+    outcome: {
+      kind: "model_anomaly", code: "HTTP_ERROR", stage: "rolled_back",
+      verified: false, applied: false,
+      rollbackReason: "真实位置验证未通过，已回滚恢复备份",
+    },
+  });
+  const a = lastAssistant(s);
+  assert.ok(a && a.heal);
+  assert.equal(a.heal!.stage, "rolled_back");
+  assert.equal(a.heal!.rollbackReason.includes("回滚"), true);
+  assert.equal(a.heal!.file, "");          // 无 action 也不抛
+});

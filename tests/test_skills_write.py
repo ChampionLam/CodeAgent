@@ -74,6 +74,7 @@ class SkillManageTestBase(unittest.TestCase):
     def create(self, name: str = "demo-skill") -> None:
         self.manage_ok([{"action": "create", "name": name,
                          "description": "演示用技能",
+                         "when_to_use": "需要演示时",
                          "body": "第一步：看一眼。\n第二步：动手。"}])
 
 
@@ -161,7 +162,7 @@ class TestFiveActions(SkillManageTestBase):
     def test_two_actions_in_one_batch_share_the_call(self):
         result = self.manage_ok([
             {"action": "create", "name": "batch-skill",
-             "description": "批内创建", "body": "起点。"},
+             "description": "批内创建", "when_to_use": "需要批内创建时", "body": "起点。"},
             {"action": "patch", "name": "batch-skill",
              "old_string": "起点。", "new_string": "起点。终点。"},
         ])
@@ -196,6 +197,7 @@ class TestBuiltinReject(SkillManageTestBase):
     def test_create_with_a_builtin_name_is_refused(self):
         result = self.manage([{"action": "create", "name": "pinned-skill",
                                "description": "冒名内置",
+                               "when_to_use": "需要冒名时",
                                "body": "占位。"}])
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "FORBIDDEN")
@@ -214,7 +216,7 @@ class TestAtomicRollback(SkillManageTestBase):
         # 坏操作：patch 一个不存在的 old_string（NOT_FOUND，整批回滚）
         result = self.manage([
             {"action": "create", "name": "rolled-skill",
-             "description": "本不该留下", "body": "半截。"},
+             "description": "本不该留下", "when_to_use": "需要回滚测试时", "body": "半截。"},
             {"action": "patch", "name": "victim-skill",
              "old_string": "磁盘上根本没有这段话",
              "new_string": "改不动。"},

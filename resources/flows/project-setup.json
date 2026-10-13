@@ -1,0 +1,72 @@
+{
+  "id": "project-setup",
+  "title": "项目起步",
+  "start": "mode",
+  "greeting": "欢迎使用项目会话。",
+  "intro": "项目会话一建好就走这套：先问新建还是接入现有的。新建先问项目名称（这个名字就作为会话标题），再问项目目录，然后问项目目标；接入先问目录。最后把聊出来的拢成一条开场任务。技术栈不在这里问——不着急，聊到再说。",
+  "steps": [
+    {
+      "id": "mode",
+      "say": "请问是**新建项目**，还是**接入现有项目**？",
+      "options": [
+        { "label": "新建项目", "value": "新建项目", "goto": "name" },
+        { "label": "接入现有项目", "value": "接入现有项目", "goto": "dir" }
+      ]
+    },
+    {
+      "id": "name",
+      "say": "请问项目名称是什么？这个名字就作为这个会话的标题。",
+      "input": {
+        "placeholder": "比如：数据看板",
+        "save_as": "项目名称"
+      },
+      "goto": "newdir"
+    },
+    {
+      "id": "newdir",
+      "say": "这个项目放在哪个目录？填个路径，我先记下来。",
+      "input": {
+        "placeholder": "比如：D:\\work\\data-dashboard",
+        "save_as": "项目目录"
+      },
+      "check": "dir_exists",
+      "goto": "goal"
+    },
+    {
+      "id": "dir",
+      "say": "现有代码在哪个目录？我先扫一遍再往下聊。",
+      "input": {
+        "placeholder": "比如：D:\\work\\my-project",
+        "save_as": "项目目录"
+      },
+      "check": "dir_exists",
+      "goto": "openspec"
+    },
+    {
+      "id": "goal",
+      "say": "这个项目想做成什么样？一句话说明一下。",
+      "input": {
+        "placeholder": "比如：每周的销售报表自动跑出来发到群里",
+        "save_as": "项目目标"
+      },
+      "goto": "openspec"
+    },
+    {
+      "id": "openspec",
+      "say": "要不要先出一份改动方案给你过目？走 **OpenSpec** 那套，你确认之后我再改代码。",
+      "options": [
+        {
+          "label": "先写方案",
+          "value": "用 OpenSpec：先写改动提案，我确认后再实现",
+          "goto": "done"
+        },
+        { "label": "直接聊", "value": "先不用 OpenSpec，直接聊", "goto": "done" }
+      ]
+    },
+    {
+      "id": "done",
+      "say": "好了，我把这些整理成一条开场任务放在下面的输入框里，你看一眼。",
+      "end": true
+    }
+  ]
+}

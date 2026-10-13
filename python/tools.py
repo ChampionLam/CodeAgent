@@ -853,6 +853,7 @@ class ListSkillsTool(Tool):
             row = "- %s: %s" % (skill.name, skill.description)
             if skill.when_to_use:
                 row += " (when: %s)" % skill.when_to_use
+            row += " [%d chars]" % len(skill.body or "")
             lines.append(row)
         return _ok("\n".join(lines), count=len(skills),
                    names=[s.name for s in skills])
@@ -1163,6 +1164,15 @@ def register(tool: Tool) -> None:
 
 def get(name: str) -> Tool | None:
     return _REGISTRY.get(name)
+
+
+def unregister(name: str) -> None:
+    """摘除一个已注册工具（MCP 回灌层重同步时用：server 关掉/工具消失）。
+
+    内置工具同样可摘（注册表不区分来源）；摘一个不存在的名字是幂等 no-op，
+    不抛 —— 重同步是「对齐目标状态」的语义，不是严格事务。
+    """
+    _REGISTRY.pop(name, None)
 
 
 def list_tools() -> list[Tool]:

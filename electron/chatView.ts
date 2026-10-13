@@ -42,6 +42,25 @@ export interface ApprovalView {
   readonly canAlwaysAllow: boolean;
 }
 
+export interface HealStepView {
+  readonly label: string;
+  readonly detail: string;
+}
+
+export interface HealReportView {
+  readonly trigger: "auto" | "manual";
+  readonly kind: string;
+  readonly code: string;
+  readonly stage: string;
+  readonly diagnosis: string;
+  readonly verified: boolean;
+  readonly applied: boolean;
+  readonly file: string;
+  readonly explanation: string;
+  readonly failureReason: string;
+  readonly rollbackReason: string;
+}
+
 export interface MessageView {
   readonly role: Role;
   readonly reasoning: string;
@@ -51,6 +70,7 @@ export interface MessageView {
   readonly finishReason?: string;
   readonly usage?: Record<string, unknown> | null;
   readonly error?: { code: string; message: string } | null;
+  readonly heal?: HealReportView | null;
 }
 
 export interface ChatViewState {
@@ -273,6 +293,27 @@ export function reduceEvent(
       };
       const next = withLastAssistant(state, (m) => ({ ...m, streaming: false, error }));
       return { ...next, streaming: false, lastError: error, pendingApproval: null };
+    }
+
+    case "chat.heal": {
+      // P0-5 自愈报告：把「病历 -> 模型建议 -> 验证 -> 是否应用」整链路挂在
+      // 最后一条助手消息上，UI 可见这次自愈做了什么。
+      const out = asRecord(payload.outcome);
+      const act = asRecord(out.action);
+      const report: HealReportView = {
+        trigger: asString(payload.trigger, "auto") === "manual" ? "manual" : "auto",
+        kind: asString(out.kind),
+        code: asString(out.code),
+        stage: asString(out.stage),
+        diagnosis: asString(out.diagnosis),
+        verified: asBool(out.verified),
+        applied: asBool(out.applied),
+        file: asString(act.file),
+        explanation: asString(act.explanation),
+        failureReason: asString(out.failureReason),
+        rollbackReason: asString(out.rollbackReason),
+      };
+      return withLastAssistant(state, (m) => ({ ...m, heal: report }));
     }
 
     default:

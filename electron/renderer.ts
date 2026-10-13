@@ -14,6 +14,7 @@ import {
   reduceEvent,
   reduceUserMessage,
   type ChatViewState,
+  type HealReportView,
   type MessageView,
   type ToolCallView,
 } from "./chatView";
@@ -150,6 +151,8 @@ function renderMessage(msg: MessageView, index: number): HTMLElement {
 
   for (const call of msg.toolCalls) body.appendChild(renderToolCall(call));
 
+  if (msg.heal) body.appendChild(renderHeal(msg.heal));
+
   if (msg.error) {
     const err = document.createElement("div");
     err.className = "err";
@@ -173,6 +176,51 @@ function renderMessage(msg: MessageView, index: number): HTMLElement {
 
   wrap.appendChild(body);
   return wrap;
+}
+
+const HEAL_STAGE_LABEL: Record<string, string> = {
+  created: "已立案",
+  diagnosed: "已诊断",
+  patched: "沙箱补丁完成",
+  sandboxed: "沙箱验证通过",
+  applied: "已应用",
+  verified: "已应用并验证",
+  rolled_back: "已回滚",
+  skipped: "跳过（需人工）",
+  failed: "失败",
+  stopped: "已停止（红线/超限）",
+};
+
+function renderHeal(h: HealReportView): HTMLElement {
+  const det = document.createElement("details");
+  det.className = "tool";
+  det.open = !h.applied;           // 成功的收起，失败/回滚的默认展开
+  const sum = document.createElement("summary");
+  const tag = document.createElement("span");
+  tag.className = "name";
+  tag.textContent = `自愈 · ${h.trigger === "auto" ? "自动" : "手动"}`;
+  const kind = document.createElement("span");
+  kind.className = "stat";
+  kind.textContent = `${h.kind || "?"}/${h.code || "?"}`;
+  const st = document.createElement("span");
+  st.className = `stat ${h.applied ? "ok" : h.stage === "rolled_back" || h.stage === "failed" ? "error" : "pending"}`;
+  st.textContent = HEAL_STAGE_LABEL[h.stage] ?? h.stage;
+  sum.append(tag, kind, st);
+  det.appendChild(sum);
+
+  const pre = document.createElement("pre");
+  const lines: string[] = [];
+  lines.push(`病历: ${h.kind}/${h.code}`);
+  if (h.diagnosis) lines.push(`诊断: ${h.diagnosis}`);
+  if (h.file) lines.push(`补丁目标: ${h.file}`);
+  if (h.explanation) lines.push(`理由: ${h.explanation}`);
+  lines.push(`沙箱验证: ${h.verified ? "通过" : "未通过"}`);
+  lines.push(`是否应用: ${h.applied ? "已应用到真实位置" : "未应用"}`);
+  if (h.failureReason) lines.push(`说明: ${h.failureReason}`);
+  if (h.rollbackReason) lines.push(`回滚: ${h.rollbackReason}`);
+  pre.textContent = lines.join("\n");
+  det.appendChild(pre);
+  return det;
 }
 
 function renderToolCall(call: ToolCallView): HTMLElement {

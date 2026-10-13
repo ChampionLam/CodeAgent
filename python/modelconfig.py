@@ -429,7 +429,11 @@ def _backfill_generation_defaults(item: dict) -> dict:
     # the section-6 mapping. Resolve it from the endpoint host so the thinking
     # switch actually reaches the vendor; nothing is written here (the value
     # gets persisted the next time the user saves the entry).
-    item["provider"] = resolve_provider_key(item.get("provider"), item.get("baseUrl"))
+    # 2026-10-12（用户点名 legacy 不再露面）：host 也认不出来时，占位值一律归
+    # 空——内部 id（legacy 这类）绝不透传给界面；空 = 未适配，行为与 legacy 相同
+    # （一个思考键都不发），但界面渲染成「未配置」而不是把内部代号当厂商名展示。
+    resolved = resolve_provider_key(item.get("provider"), item.get("baseUrl"))
+    item["provider"] = "" if resolved in PROVIDER_PLACEHOLDERS else resolved
     # Thinking shares the output budget on some vendors (measured on
     # MiniMax-M3: adaptive + max_tokens=4096 -> empty content). We do NOT touch
     # the configured value; we expose the cap that will actually be sent plus a
@@ -456,7 +460,9 @@ def _synthesize_legacy(raw: dict) -> dict:
     item = {
         "id": LEGACY_ID,
         "label": model_name,
-        "provider": "legacy",
+        # 2026-10-12：provider 不再写死 "legacy"——交给 _backfill_generation_defaults
+        # 按 baseUrl 主机名解析；解析不出就是空，界面不会再看到 legacy 这个词。
+        "provider": "",
         "baseUrl": str(m.get("baseUrl") or ""),
         "model": model_name,
         "apiKeyEnv": str(m.get("apiKeyEnv") or ""),
@@ -978,6 +984,18 @@ def resolve_model(model_id: str | None, root: str | None = None) -> dict:
     env_name = str(item.get("apiKeyEnv") or "")
     api_key = os.environ.get(env_name, "").strip()
     if not env_name or not api_key:
+        base_url = str(item.get("baseUrl") or "").strip()
+        model_name = str(item.get("model") or "").strip()
+        if not base_url or not model_name:
+            # 2026-10-12 厂商中立化（用户点名）：模型本身没配（baseUrl/model 为空）
+            # 时，用户还没有选过任何厂商——此时报错不许带出厂商 env 变量名（那
+            # 是产品兜底路径自己填的模板值，不是用户配的）。只给可执行的引导。
+            # 一旦真的配了某厂商（baseUrl/model 非空），下面的分支才允许点名
+            # 它的 env 变量名（此时是准确的）。
+            raise ModelConfigError(
+                MODEL_KEY_MISSING,
+                "尚未配置模型：请在设置里选择模型并填写 API key"
+                "（key 只从环境变量 / .env 文件读取）")
         raise ModelConfigError(
             MODEL_KEY_MISSING,
             "environment variable %s is not set (key only comes from the "

@@ -20,6 +20,188 @@
 .topbar__stat {
   -webkit-app-region: no-drag;
 }
+
+/* ── 项目会话头部（契约 v1 §3.2.4）─────────────────────────────────
+   只挂在 kind=project 的会话上；普通会话不渲染这一段。 */
+.projhead {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 46vw;
+  height: 30px;
+  padding: 0 4px 0 0;
+  -webkit-app-region: no-drag;
+}
+.projhead__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.projhead__icon { flex: 0 0 auto; color: var(--accent); }
+.projhead__root {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.projhead__skills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.projhead__chip {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 3px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.projhead__noskills {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.projhead__edit {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.projhead__edit:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* 编辑态：占满 topbar 左区，两行输入 + 技能多选 + 动作。 */
+.projhead--editing {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.projhead--editing::-webkit-scrollbar { display: none; }
+.projhead__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.projhead__field--skills { flex: 1 1 auto; }
+.projhead__label {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.projhead__field input {
+  height: 26px;
+  padding: 0 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  min-width: 90px;
+}
+.projhead__field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.projhead__field input::placeholder { color: var(--text-muted); }
+.projhead__skillpick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.projhead__skillpick::-webkit-scrollbar { display: none; }
+.projhead__pick {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+}
+.projhead__pick:hover { border-color: var(--border-strong); color: var(--text-secondary); }
+.projhead__pick.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.projhead__skillmsg {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.projhead__error {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--warn-text, #f59e0b);
+  white-space: nowrap;
+}
+.projhead__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.projhead__cancel {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.projhead__cancel:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.projhead__save {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  color: #fff;
+  background: var(--grad-btn);
+  font-size: 12px;
+  font-weight: 600;
+}
+.projhead__save:hover:not(:disabled) { background: var(--grad-btn-hover); }
+.projhead__cancel:disabled,
+.projhead__save:disabled { opacity: 0.5; cursor: default; }
 /* Windows-style caption buttons, drawn by the app. */
 .winbtns {
   display: flex;

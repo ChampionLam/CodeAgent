@@ -184,14 +184,20 @@ class ModelVerdictTests(unittest.TestCase):
         v = self._judge("find . -delete", p=0.97)
         self.assertTrue(v.requires_approval)
         self.assertEqual(v.tier, "dangerous")
-        self.assertIn("0.97", v.reason)
-        self.assertIn("高置信", v.reason)
+        # t_87ce5f71：面向用户的 reason 不再含 p=…/高置信 等内部术语
+        self.assertIn("危险等级：高", v.reason)
+        for term in ("弹卡", "校准", "概率", "p=", "0.97", "0.85",
+                     "高置信", "很确定", "不确定带", "建议"):
+            self.assertNotIn(term, v.reason)
 
     def test_mid_p_blocks(self):
         v = self._judge("git commit -m \"docs: 修 rm -rf 说明\"", p=0.5)
         self.assertTrue(v.requires_approval)
         self.assertEqual(v.tier, "dangerous")
-        self.assertIn("模型", v.reason)
+        self.assertIn("危险等级：中", v.reason)
+        for term in ("弹卡", "校准", "概率", "p=", "0.5",
+                     "高置信", "很确定", "不确定带", "建议"):
+            self.assertNotIn(term, v.reason)
 
     def test_low_p_allows_with_unknown_pool(self):
         v = self._judge("ls -la", p=0.10)

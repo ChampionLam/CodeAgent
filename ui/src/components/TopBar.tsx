@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../state/store';
 import { Icon } from './Icon';
+import { ProjectHeader } from './ProjectHeader';
 import './TopBar.css';
 
 /**
@@ -38,6 +39,11 @@ export function TopBar() {
           <Icon.Robot size={18} className="topbar__logo" />
           <span className="topbar__brand-name">CodeAgent</span>
         </span>
+        {/* 项目会话头部（契约 v1 §3.2.4）：项目名 / 目录 / 已挂技能。
+            kind=chat 时什么都不渲染——普通会话头部一字不变。 */}
+        {session?.kind === 'project' && view === 'chat' && (
+          <ProjectHeader session={session} />
+        )}
       </div>
 
       <div className="topbar__right">

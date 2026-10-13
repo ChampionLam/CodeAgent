@@ -81,9 +81,11 @@ export interface ConversationRepo {
    * when the user edits a title by hand: the sidecar RPC writes the title
    * column right away, instead of waiting for the next debounced save to
    * notice the title moved (that wait is what lost renames on restart).
+   * `opts.source` (t_d0683b3f): 'user' / 'project' mark user intent — the
+   * engine then never overwrites the title. Omitted = automatic sync.
    * Optional: the local store renames through saveConversation.
    */
-  rename?(id: string, title: string): Promise<void>;
+  rename?(id: string, title: string, opts?: { source?: 'user' | 'project' }): Promise<void>;
 
   /**
    * 引擎侧已把会话标题写进 sessions.db 并推来 chat.title 事件

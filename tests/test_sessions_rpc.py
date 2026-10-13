@@ -109,6 +109,50 @@ class SessionsRpcTest(RpcCase):
         self.assertFalse(res["ok"], res)
         self.assertTrue(res["error"]["code"])
 
+    def test_rename_without_source_keeps_title_source(self) -> None:
+        # t_d0683b3f：客户端自动同步（不带 source）不许把 title_source 钉成
+        # user —— 那样自动标题会被锁死。老的「一律标 user」行为即本 bug。
+        sid = self._call("sessions.create", title="第一会话")["result"]["id"]
+        res = self._call("sessions.rename", sessionId=sid, title="首问截断临时标题…")
+        self.assertTrue(res["ok"], res)
+        row = self.store.get_session(sid)
+        self.assertEqual(row["title"], "首问截断临时标题…")
+        self.assertIsNone(row["title_source"])
+
+    def test_rename_with_user_source_locks_title(self) -> None:
+        sid = self._call("sessions.create", title="第一会话")["result"]["id"]
+        res = self._call("sessions.rename", sessionId=sid, title="我改的名",
+                         source="user")
+        self.assertTrue(res["ok"], res)
+        row = self.store.get_session(sid)
+        self.assertEqual(row["title"], "我改的名")
+        self.assertEqual(row["title_source"], "user")
+        self.assertTrue(self.store.session_title_is_locked(sid))
+
+    def test_rename_with_garbage_source_is_not_a_lock(self) -> None:
+        sid = self._call("sessions.create", title="x")["result"]["id"]
+        self._call("sessions.rename", sessionId=sid, title="y", source="nonsense")
+        self.assertIsNone(self.store.get_session(sid)["title_source"])
+
+    def test_rename_with_escaped_title_stores_real_text(self) -> None:
+        # t_d0683b3f 二次转义：真机库里出现过字面 \uXXXX 标题。落库前还原。
+        sid = self._call("sessions.create", title="x")["result"]["id"]
+        escaped = "\\u6211\\u5728\\u505a\\u4e00\\u4e2a\\u65b0\\u529f\\u80fd\\u2026"
+        res = self._call("sessions.rename", sessionId=sid, title=escaped)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self.store.get_session(sid)["title"], "我在做一个新功能…")
+
+    def test_create_with_escaped_title_stores_real_text(self) -> None:
+        escaped = "\\u8bf7\\u7528 PowerSh\\u2026"
+        sid = self._call("sessions.create", title=escaped)["result"]["id"]
+        self.assertEqual(self.store.get_session(sid)["title"], "请用 PowerSh…")
+
+    def test_rename_title_with_other_backslashes_untouched(self) -> None:
+        # Windows 路径式的正常文本不能被转义防御误伤。
+        sid = self._call("sessions.create", title="x")["result"]["id"]
+        self._call("sessions.rename", sessionId=sid, title="C:\\Users\\lam")
+        self.assertEqual(self.store.get_session(sid)["title"], "C:\\Users\\lam")
+
     def test_store_unavailable_says_so(self) -> None:
         sidecar._SESSIONS = False
         res = self._call("sessions.list")

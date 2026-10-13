@@ -188,9 +188,16 @@ def scan(dirs: list[str] | None = None) -> dict[str, Skill]:
                 rejected.append((path, "no SKILL.md in directory"))
                 continue
             try:
+                if os.path.getsize(path) > MAX_SKILL_FILE_BYTES:
+                    rejected.append((path, "SKILL.md is over MAX_SKILL_FILE_BYTES (%d bytes)"
+                                    % MAX_SKILL_FILE_BYTES))
+                    continue
                 skill = _load_one(skill_dir, path)
             except (OSError, ValueError, UnicodeDecodeError) as exc:
                 rejected.append((path, "%s: %s" % (type(exc).__name__, exc)))
+                continue
+            if not skill.when_to_use:
+                rejected.append((path, "frontmatter has no 'when_to_use' (trigger condition is required)"))
                 continue
             if not skill.body:
                 rejected.append((path, "body is empty"))
@@ -256,6 +263,11 @@ MAX_DESCRIPTION_LENGTH = 1024
 #: 技能名格式（通行约定）：小写字母 / 数字 / 连字符，最长 64。
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 MAX_SKILL_NAME_LENGTH = 64
+
+#: 单个 SKILL.md 的字节上限（2026-10-12，任务 t_3bb4debf）。skill 正文按需
+#: 读取，但 read_skill 会把整篇塞进上下文——没有上限时一个几 MB 的 SKILL.md
+#: 能一次性吃掉上下文窗口。阈值放宽（64KB），正常技能远到不了。
+MAX_SKILL_FILE_BYTES = 64 * 1024
 
 #: 附加文件允许落的位置（通行约定 references/ templates/ assets/，另加
 #: 常见的 data/）。SKILL.md 本身只能由 create / patch 改，不经 write_file。
@@ -525,6 +537,16 @@ def create_skill(name: str, description: str, body: str, *,
             "skill %r already exists as a built-in skill (%s): built-in skills "
             "are read-only; pick a different name to create a user skill" % (name, builtin),
             code="FORBIDDEN")
+    # 2026-10-12 起触发条件必填：写入与扫描同口径，否则写出来的技能自己都
+    # 过不了扫描（create 成功、清单里却看不到，模型永远调不到它）。放在
+    # 内置拒判之后：冒名内置报 FORBIDDEN 的老口径不变。
+    if when_to_use is not None and not isinstance(when_to_use, str):
+        raise SkillWriteError("'when_to_use' must be a string")
+    if not (when_to_use or "").strip():
+        raise SkillWriteError(
+            "'when_to_use' is required: one line saying WHEN this skill applies, "
+            "e.g. \"用户要求总结长文时\"; the skill index only shows name + trigger, "
+            "so a skill without a trigger can never be selected")
     # 附加文件路径先全部校验（此时技能目录还不存在，逃逸检查只做静态段
     # 分析：绝对路径 / .. / 首段白名单 / SKILL.md 覆盖）
     extra: list[tuple[str, str]] = []
@@ -777,6 +799,10 @@ def apply_operations(operations: list[dict]) -> list[dict]:
             raise _fail_op(index, action, op, SkillWriteError(
                 "IO error: %s" % exc, code="IO_ERROR")) from exc
 
+    # 全批成功：统一丢弃所有 held 临时目录（此刻磁盘上才算真删）。
+    for held in deletes:
+        if held:                                   # _move_aside 理论上不返回 None（删前已 isdir），双保险
+            _discard_held(held)
     return results
 
 

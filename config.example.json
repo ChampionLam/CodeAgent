@@ -13,5 +13,22 @@
       "maxConcurrentChildren": 3,
       "nodeMaxLoop": 12
     }
+  },
+  "mcp": {
+    "servers": {
+      "filesystem": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow/root"],
+        "env": {},
+        "enabled": true
+      },
+      "remote-x": {
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "headers": { "Authorization": "Bearer ${MCP_TOKEN_X}" },
+        "enabled": false
+      }
+    }
   }
 }

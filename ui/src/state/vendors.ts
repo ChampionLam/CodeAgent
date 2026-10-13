@@ -28,5 +28,8 @@ export function vendorLabel(key?: string | null, baseUrl?: string | null): strin
   const k = String(key ?? '').trim();
   const host = String(baseUrl ?? '');
   if (k === 'dashscope-bailian' && /(^|\.)maas\./i.test(host)) return '阿里云百炼 MAAS';
+  // 2026-10-12（用户点名 legacy 不再露面）：空 provider = 没配过线路；内部代号
+  // legacy 是旧配置合成的占位（后端读出时已归空，这里再兜一层防旧数据）。
+  if (!k || k === 'legacy') return '未配置';
   return VENDOR_LABELS[k] ?? k;
 }

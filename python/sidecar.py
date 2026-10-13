@@ -375,7 +375,8 @@ _AUDIT = None
 # If the DB cannot be opened at all we log a warning and continue without
 # persistence -- chats must never die because the disk did.
 _SESSIONS_LOCK = threading.Lock()
-_SESSIONS: object = None
+# None = 尚未打开；False = 打不开（失败只报一次，不反复重试）；Store = 就绪。
+_SESSIONS: "sessionstore.SessionStore | bool | None" = None
 
 
 _RUNS = None
@@ -550,7 +551,7 @@ def _apply_resume(params: dict, messages: list) -> tuple[list, str]:
         return messages, ""
 
 
-def _session_store():
+def _session_store() -> "sessionstore.SessionStore | None":
     """Session store (lazy-open once). Unavailable -> None, chat continues."""
     global _SESSIONS
     with _SESSIONS_LOCK:
@@ -564,7 +565,7 @@ def _session_store():
             except Exception as e:
                 log("WARN", "session store unavailable: %r" % (e,))
                 _SESSIONS = False
-        return _SESSIONS or None
+        return _SESSIONS if isinstance(_SESSIONS, sessionstore.SessionStore) else None
 
 
 def _resolve_since(token: str) -> str | None:
@@ -1364,10 +1365,18 @@ def _handle_sessions_rpc(req_id, method: str, params: dict) -> dict:
             if not isinstance(title, str) or not title.strip():
                 return _make_error_response(req_id, "BAD_REQUEST",
                                             "params.title must be a non-empty string")
+            # 来源标记（t_d0683b3f）：只有显式 params.source == 'user' 才锁
+            # 标题（用户在界面上真的改了名）。客户端自动同步（首问截断、
+            # debounced save）不带 source —— 之前无脑标 user，把自动标题
+            # 生成永远锁死（真机 s_1791826625478 复现）。'project' 保留给
+            # 项目名推标题（同样用户意图）。缺省/未知值 = 不动 title_source，
+            # 纯增量：老调用方（不带 source）行为从「标 user」变为「不改
+            # title_source」——正是本 bug 要修的语义。
+            source = params.get("source")
+            if source not in ("user", "project"):
+                source = None
             try:
-                # 'user'：界面 sessions.rename 是用户改标题的入口（t_37f5d060
-                # 008 契约）。带上来源标记，引擎侧的自动生成从此不再覆盖它。
-                store.rename_session(sid, title, source="user")
+                store.rename_session(sid, title, source=source)
             except LookupError:
                 return _make_error_response(req_id, "SESSION_NOT_FOUND",
                                             f"no such session: {sid}")

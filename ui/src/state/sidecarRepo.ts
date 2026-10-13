@@ -59,7 +59,12 @@ interface SessionsBridge {
       workspaceRoot?: string;
       projectSkills?: string[];
     }): Promise<{ id: string; title: string }>;
-    rename(sessionId: string, title: string): Promise<unknown>;
+    /**
+     * Rename a session. `opts.source` (t_d0683b3f): 'user'/'project' lock the
+     * title server-side; omitted = automatic sync, keeps title_source intact
+     * so the engine's auto-title generation still applies.
+     */
+    rename(sessionId: string, title: string, opts?: { source?: 'user' | 'project' }): Promise<unknown>;
     /** Partial update of a project session's project fields (contract v1 §1.2). */
     updateProject?(sessionId: string, patch: {
       projectName?: string;
@@ -287,7 +292,10 @@ export class SidecarConversationRepo implements ConversationRepo {
       return;
     }
     // The store flushes on a debounce after every turn, so only a real title
-    // change is worth a round-trip.
+    // change is worth a round-trip. No `source` here (t_d0683b3f): this is the
+    // automatic client sync of the local first-question title — it must not
+    // tag title_source as 'user', or the engine's auto-title would be locked
+    // out forever (real-machine bug s_1791826625478).
     if (this.sentTitle.get(c.id) === title) return;
     await this.bridge.rename(c.id, title);
     this.sentTitle.set(c.id, title);
@@ -311,9 +319,14 @@ export class SidecarConversationRepo implements ConversationRepo {
     return res ?? null;
   }
 
-  /** Title-only push (bridge rename); keeps our bookkeeping in step. */
-  async rename(id: string, title: string): Promise<void> {
-    await this.bridge.rename(id, title);
+  /**
+   * Title-only push (bridge rename). `opts.source` (t_d0683b3f): 'user' /
+   * 'project' lock the title server-side (engine never overwrites); omitted =
+   * automatic sync, title_source untouched. Callers: store.renameSession
+   * passes 'user', project-name-as-title passes 'project'.
+   */
+  async rename(id: string, title: string, opts?: { source?: 'user' | 'project' }): Promise<void> {
+    await this.bridge.rename(id, title, opts);
     this.known.add(id);
     this.sentTitle.set(id, title);
   }

@@ -109,6 +109,12 @@ def load_config(root: str | None = None) -> ModelConfig:
         raise ConfigError("配置不是合法 JSON: %s" % e) from e
 
     m = raw.get("model") or {}
+    if not (m.get("baseUrl") or "").strip() or not (m.get("model") or "").strip() \
+            or not (m.get("apiKeyEnv") or "").strip():
+        # 2026-10-12 厂商中立化（用户点名）：空白模板（未配置模型）直接给可执行
+        # 引导，不报具体字段名——字段名是产品内部结构，对新装实例的使用者没有
+        # 行动价值；也不带任何厂商/env 变量名（用户此时没选过任何厂商）。
+        raise ConfigError("尚未配置模型：请在设置里选择模型并填写 API key")
     for k in ("baseUrl", "model", "apiKeyEnv"):
         if not m.get(k):
             raise ConfigError("配置缺字段 model." + k)
@@ -122,6 +128,8 @@ def load_config(root: str | None = None) -> ModelConfig:
     )
     key = os.environ.get(cfg.api_key_env, "").strip()
     if not key:
+        # baseUrl/model 已配好才走到这里：env 变量名属于用户自己选的厂商，
+        # 此时点名是准确的，保留。
         raise ConfigError("环境变量 %s 未设置（key 只从环境变量读）" % cfg.api_key_env)
     cfg.api_key = key
     return cfg
