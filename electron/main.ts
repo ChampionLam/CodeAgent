@@ -83,6 +83,31 @@ function projectRoot(): string {
   return app.getAppPath();
 }
 
+/**
+ * t_2d0783e3: the DEFAULT workspace root, read from the app tree's
+ * config.json (capabilities.workspaceRoot -- written by the installer
+ * as <InstallDir>\workspace and changeable from a conversation via the
+ * set_workspace tool / workspace.set RPC). Falls back to
+ * <userData>/workspace when the config is missing, unreadable, or the
+ * key is blank/relative (a relative value is ambiguous here -- the
+ * sidecar would expand it against ITS cwd; refuse instead of guessing).
+ */
+function defaultWorkspaceRoot(): string {
+  try {
+    const cfgPath = path.join(projectRoot(), "config.json");
+    const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8")) as {
+      capabilities?: { workspaceRoot?: unknown };
+    };
+    const configured = raw?.capabilities?.workspaceRoot;
+    if (typeof configured === "string" && path.isAbsolute(configured.trim())) {
+      return configured.trim();
+    }
+  } catch {
+    // missing / broken config -> legacy default
+  }
+  return userDataSubdir("workspace");
+}
+
 function getSidecarCommand(): { command: string; args: string[] } {
   const root = projectRoot();
   const script = path.join(root, "python", "sidecar.py");
@@ -464,7 +489,7 @@ function registerHubIpc(): void {
       images,
       // 挂上来的 xlsx/txt 得靠工具读；光看图看不进表格里的数。
       useTools: true,
-      workspaceRoot: userDataSubdir("workspace"),
+      workspaceRoot: defaultWorkspaceRoot(),
     }, { id: chatId });
     return { ...(ack as Record<string, unknown>), chatId, sessionId, model: await hubModelLabel() };
   });
@@ -629,6 +654,9 @@ function requireClient(): SidecarClient {
 
 async function bootstrap(): Promise<void> {
   const { command, args } = getSidecarCommand();
+  // t_5d29bcab: the tail arg is the sidecar script path — the identity
+  // anchor for leftover-pid validation (see getSidecarCommand).
+  const script = args[args.length - 1];
   logSink().info("bootstrap: starting sidecar", { data: { command } });
   client = new SidecarClient({
     transportFactory: () => new StdioTransport({
@@ -636,12 +664,19 @@ async function bootstrap(): Promise<void> {
       args,
       cwd: projectRoot(),
       // The sidecar keeps its sqlite audit db + attachment store under this dir.
-      env: { ...process.env, DESK_AGENT_DATA_DIR: userDataSubdir("data") },
+      // v24 (t_27714fcb): respect an inherited DESK_AGENT_DATA_DIR (set by the
+      // CodeAgent.bat launcher as <InstallDir>\data) instead of always
+      // overriding it with <userData>\data. No inherited value -> legacy
+      // behavior preserved (<userData>\data, incl. %APPDATA%\CodeAgent\data).
+      env: { ...process.env, DESK_AGENT_DATA_DIR: process.env.DESK_AGENT_DATA_DIR || userDataSubdir("data") },
       windowsHide: true, // R2
       spawner: defaultDeps().spawner,
     }),
     deps: defaultDeps(),
     pidFilePath: path.join(app.getPath("userData"), "sidecar.pid"),
+    // t_5d29bcab: identity anchor for leftover-pid validation — the script
+    // the transport spawns is exactly the path we hand it here.
+    sidecarScriptPath: script,
   });
 
   client.onStatus(pushStatus);
@@ -668,7 +703,7 @@ async function bootstrap(): Promise<void> {
     // The renderer needs the workspace root to resolve relative image refs the
     // agent writes (a tool reports `gen-ok.png`, not the full path).
     const info = (await requireClient().request("info")) as Record<string, unknown>;
-    return { ...info, workspaceRoot: userDataSubdir("workspace") };
+    return { ...info, workspaceRoot: defaultWorkspaceRoot() };
   });
   ipcMain.handle("agent:tools", async () => requireClient().request("tools.list"));
   // Skills + the tool on/off switches (settings page). toolToggle writes the
@@ -825,7 +860,7 @@ async function bootstrap(): Promise<void> {
     const c = requireClient();
     const chatId = randomUUID();
     const request = { ...(params ?? {}) } as Record<string, unknown>;
-    if (!request.workspaceRoot) request.workspaceRoot = userDataSubdir("workspace");
+    if (!request.workspaceRoot) request.workspaceRoot = defaultWorkspaceRoot();
     if (!request.sessionId) request.sessionId = "default";
     const ack = await c.request("chat", request, { id: chatId });
     return { ...ack, chatId };

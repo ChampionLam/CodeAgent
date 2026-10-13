@@ -172,6 +172,15 @@ export class StdioTransport implements Transport {
     return this._pid;
   }
 
+  /** (t_5d29bcab) Sidecar script path = last positional spawn arg, when present. */
+  get scriptPath(): string | null {
+    const args = this.opts.args;
+    // Args: [<flags...>, script]; the script is the last non-flag argument.
+    // We simply return the LAST argument — callers always spawn
+    // `python [python-flags] sidecar.py`, so the tail is the script.
+    return args.length ? String(args[args.length - 1]) : null;
+  }
+
   get exitCode(): number | null {
     return this._exitCode;
   }

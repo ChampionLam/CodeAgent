@@ -93,6 +93,8 @@ SIDECAR_CAPABILITIES: list[str] = [
     "run.pending", "run.active", "run.interrupt", "run.dismiss",
     "mcp.list", "mcp.toggle",
     "mcp.describe", "mcp.upsert", "mcp.remove", "mcp.reload",
+    # t_2d0783e3: agent 可在对话里改默认工作目录（写 capabilities.workspaceRoot）
+    "workspace.set",
     "heal.trigger", "heal.history",
 ]
 
@@ -335,6 +337,106 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DATA_DIR = os.environ.get("DESK_AGENT_DATA_DIR") or os.path.join(_REPO_ROOT, "data")
 #: 工具失败经验库（自我进化）：落盘在数据目录，进程内单例。
 _LESSONS = None
+
+
+def _acquire_data_dir_lock():
+    """t_5d29bcab：侧车自锁 —— 对数据目录加互斥，防止两个 sidecar 进程
+    同时写 sessions.db / 断点库。
+
+    机制：数据目录下 locks/sidecar.lock 固定名目录（原子 mkdir，存在即
+    已有人在跑），锁内写 pid 文件；退出时 rmdir 清理。启动侧发现锁在：
+    读 pid，holder 已死视为陈锁（rmdir 掉再抢），活着则拒绝。
+
+    返回 (acquired, holder_pid_or_None, reason)。绝不抛异常：拿不到锁
+    只打日志并让调用方决定退出，不挡 hello 帧。
+    """
+    import atexit
+
+    lock_root = os.path.join(_DATA_DIR, "locks")
+    lock_dir = os.path.join(lock_root, "sidecar.lock")
+    pid_file = os.path.join(lock_dir, "pid")
+
+    def _pid_alive(pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:
+            return True
+
+    def _read_holder():
+        try:
+            with open(pid_file, "r") as fh:
+                return int(fh.read().strip())
+        except (OSError, ValueError):
+            return None
+
+    try:
+        os.makedirs(lock_root, exist_ok=True)
+    except Exception as exc:
+        return True, None, "lock dir unavailable (%s); proceeding unlocked" % exc
+
+    # 陈锁清扫：holder 已死（或读不出 pid）则删锁重抢。
+    if os.path.isdir(lock_dir):
+        holder = _read_holder()
+        if holder is not None and _pid_alive(holder):
+            return False, holder, "another sidecar holds the data-dir lock"
+        try:
+            os.rmdir(lock_dir)  # 空目录；有 pid 文件时先删它
+        except OSError:
+            try:
+                os.unlink(pid_file)
+                os.rmdir(lock_dir)
+            except OSError:
+                pass  # 仍失败：下面 mkdir 会失败并走兜底
+    try:
+        os.mkdir(lock_dir)
+        with open(pid_file, "w") as fh:
+            fh.write(str(os.getpid()))
+        atexit.register(_release_data_dir_lock, lock_dir, pid_file)
+        return True, os.getpid(), "ok"
+    except FileExistsError:
+        holder = _read_holder()
+        if holder is not None and _pid_alive(holder):
+            return False, holder, "another sidecar holds the data-dir lock"
+        # 占锁者刚死还没清：递归重试一次。
+        return _acquire_data_dir_lock()
+    except Exception as exc:
+        return True, None, "mkdir failed (%s); proceeding unlocked" % exc
+
+
+def _release_data_dir_lock(lock_dir, pid_file):
+    for path in (pid_file, lock_dir):
+        try:
+            if os.path.isfile(path):
+                os.unlink(path)
+            elif os.path.isdir(path):
+                os.rmdir(path)
+        except OSError:
+            pass
+
+
+def _lock_if_duplicate() -> bool:
+    """t_5d29bcab：重复实例守门。返回 True = 允许启动，False = 已有实例、
+    必须退出。日志落 stderr + 结构化日志（如可用）。"""
+    acquired, holder, reason = _acquire_data_dir_lock()
+    if acquired:
+        return True
+    msg = ("sidecar duplicate: data-dir lock held by pid=%s (%s); exiting "
+           "without touching sessions.db" % (holder, reason))
+    try:
+        sys.stderr.write("[sidecar] %s\n" % msg)
+    except Exception:
+        pass
+    try:
+        log("ERROR", msg)
+    except Exception:
+        pass
+    return False
+
 
 
 def _lessons_block() -> str:
@@ -812,6 +914,33 @@ def _base_dir(params_ws=None) -> str:
     if isinstance(configured, str) and configured.strip():
         return os.path.abspath(os.path.expanduser(configured.strip()))
     return os.path.expanduser("~")
+
+
+def _make_workspace_setter():
+    """t_2d0783e3：set_workspace 工具的落盘回调工厂。
+
+    与 workspace.set RPC 同一条校验链（绝对路径 + 自动建目录 + 原子写回），
+    成功返回新值（绝对路径），失败抛 ValueError / OSError，由工具层转成
+    IO_ERROR / BAD_REQUEST 风格的 ToolResult。
+    """
+    def setter(path: str) -> str:
+        expanded = os.path.expanduser(path.strip())
+        if not os.path.isabs(expanded):
+            raise ValueError(
+                "path must be absolute (got %r); relative paths are ambiguous" % path)
+        os.makedirs(expanded, exist_ok=True)
+        _persist_workspace_root(expanded)
+        log("INFO", "workspace root set to %s" % expanded)
+        return expanded
+    return setter
+
+
+# 模块级单例：回调无状态，一次建好每轮复用（None = 未接线）。
+_workspace_setter_instance = _make_workspace_setter()
+
+
+def _workspace_setter():
+    return _workspace_setter_instance
 
 
 def _audit_store():
@@ -2053,6 +2182,31 @@ def _persist_tools_disabled(names: list[str]) -> None:
         caps = {}
         raw["capabilities"] = caps
     caps["toolsDisabled"] = list(names)
+    _atomic_write_config(root, raw)
+
+
+def _persist_workspace_root(path: str) -> None:
+    """t_2d0783e3：把 capabilities.workspaceRoot 原子写回 config.json。
+
+    写法照 _persist_tools_disabled（临时文件 + os.replace，其它键保留）；
+    config.json 缺失时以 appconfig.load 的回落（config.example.json）为
+    起点抄一份 —— 与既有持久化同一条路。
+    """
+    root = _tools_config_root()
+    try:
+        raw = appconfig.load(root=root)
+    except appconfig.AppConfigError:
+        raw = {}
+    caps = raw.get("capabilities")
+    if not isinstance(caps, dict):
+        caps = {}
+        raw["capabilities"] = caps
+    caps["workspaceRoot"] = path
+    _atomic_write_config(root, raw)
+
+
+def _atomic_write_config(root: str, raw: dict) -> None:
+    """config.json 原子写回的共用底座（临时文件 + os.replace）。"""
     path = os.path.join(root, "config.json")
     text = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
     fd, tmp = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=root)
@@ -2354,6 +2508,43 @@ def handle_request(req: dict) -> dict:
     if method == "usage.summary":
         return _handle_usage_rpc(req_id, method, params)
 
+    if method == "workspace.set":
+        # t_2d0783e3：agent/界面把默认工作目录写进 config.json 的
+        # capabilities.workspaceRoot。约束：只收绝对路径（相对/空一律拒绝，
+        # 「相对到哪里」在 RPC 边界说不清，就不猜）；目录不存在会创建
+        # （parents=True）—— 用户说「切到 D:\\projects\\foo」时目录多半还没建。
+        # 生效口径：新值立即落盘；本轮已带 workspaceRoot 的请求仍走请求值
+        # （显式优先），不带请求值的下一轮（含新会话）从 config 解析出新值
+        # —— 与 _resolve_workspace 的优先级链一致。
+        path = params.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return _make_error_response(
+                req_id, "BAD_REQUEST",
+                "params.path is required and must be a non-empty string")
+        expanded = os.path.expanduser(path.strip())
+        if not os.path.isabs(expanded):
+            return _make_error_response(
+                req_id, "BAD_REQUEST",
+                "params.path must be an absolute path (got %r); "
+                "relative paths are ambiguous over RPC" % path)
+        try:
+            os.makedirs(expanded, exist_ok=True)
+        except OSError as exc:
+            return _make_error_response(
+                req_id, "IO_ERROR",
+                "cannot create workspace directory %s: %s" % (expanded, exc))
+        try:
+            _persist_workspace_root(expanded)
+        except OSError as exc:
+            return _make_error_response(
+                req_id, "IO_ERROR",
+                "cannot persist workspaceRoot to config.json: %s" % exc)
+        log("INFO", "workspace root set to %s" % expanded)
+        return _make_ok_response(req_id, {
+            "workspaceRoot": expanded,
+            "persisted": True,
+        })
+
     if method == "chat.cancel":
         target = params.get("id")
         if not isinstance(target, str) or not target:
@@ -2419,6 +2610,12 @@ def main() -> int:
     _configure_logging()
     log("INFO", f"sidecar starting (pid={os.getpid()}, protocolVersion={SIDECAR_PROTOCOL_VERSION})")
     log("INFO", f"log dir: {logging_kit.get_logger().log_dir}")
+    # t_5d29bcab：单实例自锁 —— 已有 sidecar 占着数据目录就立刻退出，
+    # 绝不写 sessions.db / 断点库（此时 hello 还没发，客户端会走重启
+    # 逻辑或停在 SIDECAR_ALREADY_RUNNING，不再出现两个写入者）。
+    if not _lock_if_duplicate():
+        return 3
+
     # key 只从环境变量 / .env 读：先把 .env 灌进进程环境，界面上的
     # 「已配置 / 还没配」才和实际能不能调通一致。只报键数，不回显值。
     loaded = modelconfig.load_env_file()
@@ -2921,6 +3118,11 @@ def _run_chat(req_id, params) -> None:
     tools.set_delegator(_make_delegator(cfg=resolved_cfg, cancel=cancelled,
                                         session_id=session_id, window=window)
                         if ctx.use_tools else None)
+
+    # t_2d0783e3：set_workspace 工具的落盘回调 —— 校验 + 建目录 + 原子写
+    # config.json 的 capabilities.workspaceRoot，与 workspace.set RPC 走同一段
+    # 逻辑（用户在对话里说「切工作目录」= agent 调工具；界面将来也能复用）。
+    tools.set_workspace_setter(_workspace_setter() if ctx.use_tools else None)
     # Hand this round's tool schemas to the summarizer (thread-local, see
     # _CHAT_TLS): the L2 cache-sharing request then carries exactly the same
     # tools array the loop does, which several providers include in the

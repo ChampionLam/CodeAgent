@@ -234,13 +234,19 @@ function makeDeps(platform: NodeJS.Platform, pidFile?: string) {
   const killTree = makeFakeKillTree();
   const logger = new SilentLogger();
   const spawner = new FakeSpawner({ command: "x", args: [], windowsHide: true });
+  // t_5d29bcab: fake command-line reader. Tests can pre-seed entries:
+  // pid -> command line (or null = unreadable/gone).
+  const cmdLines = new Map<number, string | null>();
+  const readProcessCommandLine = async (pid: number): Promise<string | null> =>
+    cmdLines.has(pid) ? (cmdLines.get(pid) ?? null) : null;
   return {
     fs,
     clock,
     killTree,
     logger,
     spawner,
-    deps: { spawner, killTree, fs, clock, logger, platform },
+    cmdLines,
+    deps: { spawner, killTree, fs, clock, logger, platform, readProcessCommandLine },
     pidFile,
   };
 }
@@ -462,4 +468,120 @@ test("EOF before hello: handshake times out (synthetic 100ms timeout)", async ()
     return /handshake timed out/.test(e.message);
   });
   await client.stop();
+});
+/* ------------------------------------------------------------------ */
+/* t_5d29bcab: pid file must record the REAL sidecar pid from hello,   */
+/* not the transport/shim pid.                                         */
+/* ------------------------------------------------------------------ */
+
+test("t_5d29bcab: pid file records hello pid, not transport (shim) pid", async () => {
+  const { deps, fs, pidFile } = makeDeps("linux", "/tmp/desk-agent-t5d29bcab-hello.pid");
+  const client = new SidecarClient({
+    transportFactory: () => new FakeTransport(deps.spawner),
+    deps,
+    pidFilePath: pidFile,
+    handshakeTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    heartbeatIntervalMs: 1_000_000,
+    heartbeatTimeoutMs: 1_000_000,
+    maxRestarts: 0,
+  });
+  const startPromise = client.start();
+  await new Promise((r) => setImmediate(r));
+  const transport = (client as any).transport as FakeTransport;
+  // hello reports a DIFFERENT pid than the transport child (shim scenario).
+  transport.sendFrame({ ...helloFrame(), data: { ...helloFrame().data, pid: 12345 } });
+  await startPromise;
+  // FakeSpawner hands out 70000+ pids, hello says 12345 -> pid file must say 12345.
+  assert.equal(fs.readFile(pidFile), "12345");
+  await client.stop();
+  assert.equal(fs.exists(pidFile), false, "pid file removed on stop");
+});
+
+test("t_5d29bcab: killCurrentTree kills BOTH shim tree and real (hello) pid tree", async () => {
+  const { deps, fs, pidFile, killTree } = makeDeps("linux");
+  const client = new SidecarClient({
+    transportFactory: () => new FakeTransport(deps.spawner),
+    deps,
+    pidFilePath: pidFile,
+    handshakeTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    heartbeatIntervalMs: 1_000_000,
+    heartbeatTimeoutMs: 1_000_000,
+    maxRestarts: 0,
+  });
+  const startPromise = client.start();
+  await new Promise((r) => setImmediate(r));
+  const transport = (client as any).transport as FakeTransport;
+  const shimPid = transport.pid!;
+  transport.sendFrame({ ...helloFrame(), data: { ...helloFrame().data, pid: 12345 } });
+  await startPromise;
+  await client.stop();
+  // stop() -> killCurrentTree: shim tree AND the real pid tree both die.
+  // No sidecarScriptPath configured -> real pid killed by pid directly.
+  assert.ok(killTree.calls.includes(shimPid), `shim pid ${shimPid} tree killed`);
+  assert.ok(killTree.calls.includes(12345), "real (hello) pid tree killed");
+});
+
+test("t_5d29bcab: leftover pid alive but NOT our sidecar -> pid file removed, process NOT killed", async () => {
+  const pidFile = "/tmp/desk-agent-t5d29bcab-foreign.pid";
+  const script = "/opt/app/python/sidecar.py";
+  const { deps, fs, killTree, cmdLines } = makeDeps("linux", pidFile);
+  fs.files.set(pidFile, "5555");
+  // pid 5555 alive (readProcessCommandLine returns a NON-sidecar command line)
+  cmdLines.set(5555, "C:\\Windows\\System32\\someOtherApp.exe --flag");
+  const client = new SidecarClient({
+    transportFactory: () => new FakeTransport(deps.spawner),
+    deps,
+    pidFilePath: pidFile,
+    sidecarScriptPath: script,
+    handshakeTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    heartbeatIntervalMs: 1_000_000,
+    heartbeatTimeoutMs: 1_000_000,
+    maxRestarts: 0,
+  });
+  // isPidAlive uses process.kill — the fake deps never get that far for
+  // foreign pids because readProcessCommandLine returns the foreign cmdline
+  // and cleanup refuses before killTree. But isPidAlive(5555) on the test
+  // box may be false... force identity check by making the pid alive: use
+  // our OWN pid as the "foreign" one? No — self pid is special-cased.
+  // Instead we rely on the cmdline check being gated by isPidAlive; when
+  // the pid is dead, killTree(5555) is a no-op in production. To test the
+  // identity-refusal path deterministically we monkey-patch isPidAlive.
+  (client as any).isPidAlive = () => true;
+  const startP = client.start();
+  await new Promise((r) => setImmediate(r));
+  // Foreign process: NOT killed, pid file removed.
+  assert.equal(killTree.calls.length, 0, "foreign process not killed");
+  assert.equal(fs.exists(pidFile), false, "pid file removed without kill");
+  await client.stop();
+  await startP.catch(() => {});
+});
+
+test("t_5d29bcab: leftover pid IS our sidecar (shim or real) -> killed, then respawn", async () => {
+  const pidFile = "/tmp/desk-agent-t5d29bcab-ours.pid";
+  const script = "/opt/app/python/sidecar.py";
+  const { deps, fs, killTree, cmdLines } = makeDeps("linux", pidFile);
+  fs.files.set(pidFile, "6666");
+  // pid 6666 alive and runs OUR script (path may appear with quotes/backslashes).
+  cmdLines.set(6666, '"C:\\opt\\app\\python\\.venv\\Scripts\\python.exe" "C:\\opt\\app\\python\\sidecar.py"');
+  const client = new SidecarClient({
+    transportFactory: () => new FakeTransport(deps.spawner),
+    deps,
+    pidFilePath: pidFile,
+    sidecarScriptPath: script,
+    handshakeTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    heartbeatIntervalMs: 1_000_000,
+    heartbeatTimeoutMs: 1_000_000,
+    maxRestarts: 0,
+  });
+  (client as any).isPidAlive = () => true;
+  const startP = client.start();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(killTree.calls, [6666], "our sidecar tree killed on leftover");
+  assert.equal(fs.exists(pidFile), false, "pid file removed after kill");
+  await client.stop();
+  await startP.catch(() => {});
 });

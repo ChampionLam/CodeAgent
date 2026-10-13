@@ -26,4 +26,12 @@ export interface Transport {
   close(): Promise<void>;
   /** Current PID, if known. Null until started. */
   readonly pid: number | null;
+  /**
+   * (t_5d29bcab) The last argument of the spawn command line that is the
+   * sidecar script path (e.g. .../python/sidecar.py), when the transport
+   * knows it. Used by SidecarClient to validate a leftover pid's identity
+   * before killTree(). Optional: non-stdio transports may return null, in
+   * which case cleanup falls back to kill-as-before.
+   */
+  readonly scriptPath?: string | null;
 }

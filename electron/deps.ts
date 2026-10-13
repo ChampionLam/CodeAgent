@@ -82,6 +82,14 @@ export interface RuntimeDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly platform: NodeJS.Platform;
+  /**
+   * Read the command line of a process, or null when the process is gone
+   * / unreadable. Used to verify a leftover pid really is OUR sidecar
+   * before killTree()ing it (t_5d29bcab: the pid file used to record the
+   * venv shim pid, so blind tree-kills could hit unrelated processes and
+   * orphan the real sidecar).
+   */
+  readonly readProcessCommandLine: (pid: number) => Promise<string | null>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -89,7 +97,7 @@ export interface RuntimeDeps {
 /* entrypoint; tests can replace any subset.                            */
 /* ------------------------------------------------------------------ */
 
-import { spawn as cpSpawn } from "child_process";
+import { spawn as cpSpawn, execFile } from "child_process";
 
 export const realSpawner: Spawner = {
   spawn(opts): SpawnedProcess {
@@ -102,6 +110,43 @@ export const realSpawner: Spawner = {
     return cp as unknown as SpawnedProcess;
   },
 };
+
+/**
+ * Read a process' full command line, or null if it cannot be read (gone,
+ * EPERM, tool failure). Windows: `wmic` is deprecated/absent on Win11, so we
+ * go through PowerShell `Get-CimInstance Win32_Process`. POSIX: /proc/<pid>/cmdline.
+ * (t_5d29bcab) PowerShell needs -NonInteractive and escaping: the WQL query
+ * is passed as a single -Argument; any embedded quotes are doubled, per
+ * PowerShell native-command-line quoting rules.
+ */
+export const realReadProcessCommandLine: (pid: number) => Promise<string | null> =
+  async (pid: number): Promise<string | null> => {
+    if (!Number.isFinite(pid) || pid <= 0) return null;
+    if (process.platform === "win32") {
+      const wql = `SELECT CommandLine FROM Win32_Process WHERE ProcessId=${pid}`;
+      const psArgs = [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Get-CimInstance -Query '${wql.replace(/'/g, "''")}' | Select-Object -ExpandProperty CommandLine`,
+      ];
+      return await new Promise<string | null>((resolve) => {
+        execFile("powershell.exe", psArgs, { windowsHide: true, timeout: 5_000 }, (err, stdout) => {
+          if (err) return resolve(null);
+          const line = String(stdout ?? "").trim();
+          resolve(line.length ? line : null); // CommandLine null → empty → not ours
+        });
+      });
+    }
+    try {
+      const fs = await import("fs");
+      const raw = fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8");
+      const line = raw.replace(/\0/g, " ").trim();
+      return line.length ? line : null;
+    } catch {
+      return null;
+    }
+  };
 
 export const realKillTree: KillTree = async (pid: number): Promise<void> => {
   if (process.platform === "win32") {
@@ -166,5 +211,6 @@ export function defaultDeps(): RuntimeDeps {
     clock: realClock,
     logger: consoleLogger,
     platform: process.platform,
+    readProcessCommandLine: realReadProcessCommandLine,
   };
 }

@@ -58,6 +58,13 @@ export interface SidecarClientOptions {
   readonly maxRestarts?: number;
   /** Base backoff between restarts (ms). Default 500; multiplied by 2^n. */
   readonly restartBackoffBaseMs?: number;
+  /**
+   * (t_5d29bcab) Absolute path of the sidecar script (e.g. <root>/python/
+   * sidecar.py). Known up-front by the caller (it built the spawn command);
+   * used to verify a leftover pid's command line before killTree()ing it.
+   * When omitted, cleanup falls back to the previous pid-only behavior.
+   */
+  readonly sidecarScriptPath?: string;
 }
 
 interface PendingRequest {
@@ -91,6 +98,8 @@ interface SidecarClientResolvedOptions {
 export class SidecarClient {
   private readonly opts: SidecarClientResolvedOptions;
   private readonly deps: RuntimeDeps;
+  /** (t_5d29bcab) sidecar script path from opts, for identity-checked kills. */
+  private readonly optScriptPath: string | null;
   private transport: Transport | null = null;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly statusListeners = new Set<StatusListener>();
@@ -116,6 +125,22 @@ export class SidecarClient {
   private lastWrittenPid: number | null = null;
   /** Latest hello data received from the sidecar; null until handshake completes. */
   private helloData: HelloData | null = null;
+  /**
+   * REAL sidecar pid reported by the sidecar itself in hello
+   * (`{"type":"evt","event":"hello","data":{...,"pid":N}}`). Differs from
+   * `transport.pid` when the spawned interpreter is a shim/launcher whose
+   * child actually runs sidecar.py (Windows venv python.exe). The pid file
+   * and lastWrittenPid must track the process that truly owns sessions.db.
+   * (t_5d29bcab)
+   */
+  private realSidecarPid: number | null = null;
+  /**
+   * Absolute path of the sidecar script, captured from the transport's spawn
+   * options when the transport exposes them. Used to verify a leftover pid's
+   * command line really points at OUR sidecar before killTree()ing it.
+   * (t_5d29bcab)
+   */
+  private sidecarScriptPath: string | null = null;
 
   constructor(opts: SidecarClientOptions) {
     this.opts = {
@@ -135,6 +160,10 @@ export class SidecarClient {
       pidFilePath: opts.pidFilePath,
     };
     this.deps = opts.deps;
+    this.optScriptPath =
+      typeof opts.sidecarScriptPath === "string" && opts.sidecarScriptPath.length
+        ? opts.sidecarScriptPath
+        : null;
   }
 
   /* ---------------------------------------------------------- */
@@ -168,6 +197,8 @@ export class SidecarClient {
     // `restartTransport()` which does NOT reset, so consecutive rapid
     // failures still push restartCount up toward `maxRestarts`.
     this.restartCount = 0;
+    this.realSidecarPid = null;
+    this.sidecarScriptPath = this.optScriptPath;
     this.deps.logger.info(`start: pidFilePath=${this.opts.pidFilePath ?? "<none>"}`);
 
     // R4a + instance mutex: verify no live sidecar owns the data dir and
@@ -177,6 +208,7 @@ export class SidecarClient {
     this.updateStatus({ state: "starting", startedAt: this.deps.clock.now() });
 
     this.transport = this.opts.transportFactory();
+    this.captureScriptPath();
     this.transport.onFrame((f) => this.onFrame(f));
     this.transport.onLog((ch, line) => {
       // Sidecar logs go to stderr only; surface them via the same logger.
@@ -231,6 +263,8 @@ export class SidecarClient {
     // and the user-facing restartCount reset.
     if (this.transport) throw new Error("SidecarClient already started");
     this.stopping = false;
+    this.realSidecarPid = null;
+    this.sidecarScriptPath = this.optScriptPath;
     this.deps.logger.info(`restart: pidFilePath=${this.opts.pidFilePath ?? "<none>"}`);
 
     await this.cleanupLeftoverPid();
@@ -238,6 +272,7 @@ export class SidecarClient {
     this.updateStatus({ state: "starting", startedAt: this.deps.clock.now() });
 
     this.transport = this.opts.transportFactory();
+    this.captureScriptPath();
     this.transport.onFrame((f) => this.onFrame(f));
     this.transport.onLog((ch, line) => {
       if (ch === "stderr") this.deps.logger.info(`[sidecar stderr] ${line}`);
@@ -419,6 +454,10 @@ export class SidecarClient {
         this.helloData = data;
         this.cancelHandshakeTimer();
         offFrame();
+        // t_5d29bcab: the hello pid is the REAL sidecar process (the
+        // transport pid may only be a shim/launcher). Track it for the pid
+        // file and ownership checks.
+        this.realSidecarPid = Number.isFinite(data.pid) ? data.pid : null;
         this.updateStatus({
           backendVersion: data.backendVersion,
           protocolVersion: data.protocolVersion,
@@ -427,6 +466,11 @@ export class SidecarClient {
         });
         resolve(data);
       });
+      // t_5d29bcab: remember the REAL sidecar pid from hello. The transport
+      // pid can be a venv shim/launcher whose child actually runs sidecar.py
+      // (Windows: .venv\Scripts\python.exe is a launcher); the pid file and
+      // lastWrittenPid must track the process that truly owns sessions.db,
+      // else leftover cleanup kills the shim and orphans the real sidecar.
 
       // Also fail fast if the transport dies during handshake.
       const offClose = this.transport!.onClose(() => {
@@ -587,6 +631,74 @@ export class SidecarClient {
     if (!this.transport || !this.transport.pid) return;
     const pid = this.transport.pid;
     await this.deps.killTree(pid);
+    // t_5d29bcab: if hello reported a DIFFERENT real sidecar pid (shim
+    // scenario), tree-killing the shim alone can leave the real sidecar
+    // alive as an orphan. Kill the real pid's tree too — and if we have the
+    // script path, kill precisely by command-line match instead of pid.
+    const real = this.realSidecarPid;
+    if (real !== null && real !== pid) {
+      if (this.sidecarScriptPath) {
+        await this.killSidecarByCommandLine(real);
+      } else {
+        await this.deps.killTree(real);
+      }
+    }
+  }
+
+  /**
+   * (t_5d29bcab) Kill the tree rooted at `pid`, but ONLY after verifying via
+   * the process command line that it really is our sidecar script. Returns
+   * true if killed, false if skipped. Identity mismatch => never kill.
+   */
+  private async killSidecarByCommandLine(pid: number): Promise<boolean> {
+    const script = this.sidecarScriptPath;
+    if (!script) {
+      await this.deps.killTree(pid);
+      return true;
+    }
+    let cmdline: string | null = null;
+    try {
+      cmdline = await this.deps.readProcessCommandLine(pid);
+    } catch {
+      cmdline = null;
+    }
+    if (!cmdline) {
+      // Process gone (or unreadable): nothing to kill. Do NOT fall back to
+      // killing by pid — an unreadable-but-alive pid we can't identify is
+      // exactly the "shoot blind" failure mode we are removing.
+      return false;
+    }
+    if (!this.isOurSidecarCommandLine(cmdline)) {
+      this.deps.logger.warn(
+        `pid ${pid} alive but command line does not match our sidecar script; not killing: ${cmdline}`,
+      );
+      return false;
+    }
+    try {
+      await this.deps.killTree(pid);
+      return true;
+    } catch (e) {
+      this.deps.logger.warn(`killTree(${pid}) failed: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * (t_5d29bcab) Does this command line run OUR sidecar script? Compare on
+   * normalized backslashes and case (Windows paths are case-insensitive).
+   */
+  private isOurSidecarCommandLine(cmdline: string): boolean {
+    const script = this.sidecarScriptPath;
+    if (!script) return false;
+    const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
+    const want = norm(script);
+    const got = norm(cmdline);
+    if (got.includes(want)) return true;
+    // Quoted variants: \"C:\...\sidecar.py\" -> the escaped quote inside the
+    // normalized string collapses to "...sidecar.py" which the includes()
+    // above already catches; the case below only guards unquoted paths
+    // containing the script as the tail argument.
+    return false;
   }
 
   /* ---------------------------------------------------------- */
@@ -613,11 +725,28 @@ export class SidecarClient {
     this.updateStatus({ state: "crashed", lastError: err });
   }
 
+  /**
+   * (t_5d29bcab) Remember the sidecar script path exposed by the transport
+   * (stdio transports know their spawn args; others return undefined and
+   * identity-checked kills gracefully degrade to pid-based behavior).
+   */
+  private captureScriptPath(): void {
+    const sp = this.transport?.scriptPath ?? this.optScriptPath;
+    this.sidecarScriptPath = typeof sp === "string" && sp.length ? sp : null;
+  }
+
   private writePidFile(): void {
-    if (!this.opts.pidFilePath || !this.transport?.pid) return;
+    if (!this.opts.pidFilePath) return;
+    // t_5d29bcab: prefer the REAL sidecar pid reported in hello. The
+    // transport pid can be a venv shim/launcher on Windows whose child
+    // actually runs sidecar.py; recording the shim's pid means later
+    // cleanup kills (or misses) the shim and orphans the real sidecar —
+    // the root cause of duplicate sidecars fighting over sessions.db.
+    const pid = this.realSidecarPid ?? this.transport?.pid ?? null;
+    if (pid === null) return;
     try {
-      this.deps.fs.writeFile(this.opts.pidFilePath, String(this.transport.pid));
-      this.lastWrittenPid = this.transport.pid;
+      this.deps.fs.writeFile(this.opts.pidFilePath, String(pid));
+      this.lastWrittenPid = pid;
     } catch (e) {
       this.deps.logger.warn(`writePidFile failed: ${(e as Error).message}`);
     }
@@ -634,13 +763,16 @@ export class SidecarClient {
   /**
    * R4a + instance mutex, both applied before any spawn:
    *
-   *   1. Instance mutex — the pid file names a process that is still ALIVE
-   *      and that this client did not spawn (another app instance, or a
-   *      sidecar orphaned by a hard kill). Two sidecars writing the same
-   *      sessions.db / breakpoint store would corrupt them, and stdio gives
-   *      us no way to attach to the existing process, so the only safe move
-   *      is to fail loudly: status becomes "crashed" with a clear error and
-   *      start() rejects. Never spawn a second writer silently.
+   *   1. Instance mutex — the pid file names a process that is still ALIVE,
+   *      unreadable (identity cannot be established), and that this client
+   *      did not spawn. Two sidecars writing the same sessions.db /
+   *      breakpoint store would corrupt them, and stdio gives us no way to
+   *      attach to the existing process, so the only safe move is to fail
+   *      loudly: status becomes "crashed" with a clear error and start()
+   *      rejects. Never spawn a second writer silently.
+   *      (t_5d29bcab: when the command line IS readable we no longer guess —
+   *      a foreign cmdline means "not a sidecar", remove the file and move
+   *      on; an OUR-script cmdline means a leftover sidecar, kill it.)
    *   2. Leftover cleanup — otherwise the recorded pid is stale or our own
    *      (e.g. a hung sidecar being restarted): kill its tree and unlink so
    *      the fresh spawn starts from a clean slate.
@@ -654,6 +786,44 @@ export class SidecarClient {
     if (!Number.isFinite(pid)) {
       fs.unlink(this.opts.pidFilePath);
       return;
+    }
+    // t_5d29bcab: verify identity BEFORE both the refusal and the kill. A
+    // pid file can record the venv shim pid (legacy writePidFile bug) or a
+    // recycled pid belonging to some unrelated process. If the pid is alive
+    // and we know our script path, read its command line: foreign -> remove
+    // the pid file only (never kill, never refuse); our script -> kill.
+    if (this.isPidAlive(pid) && pid !== process.pid && this.sidecarScriptPath) {
+      let cmdline: string | null = null;
+      try {
+        cmdline = await this.deps.readProcessCommandLine(pid);
+      } catch {
+        cmdline = null;
+      }
+      if (cmdline !== null) {
+        if (!this.isOurSidecarCommandLine(cmdline)) {
+          this.deps.logger.warn(
+            `leftover pid=${pid} is alive but not our sidecar (cmdline: ${cmdline}); ` +
+            `removing pid file only, not killing`,
+          );
+          fs.unlink(this.opts.pidFilePath);
+          return;
+        }
+        // Reads as OUR sidecar: a leftover/orphaned sidecar (possibly the
+        // real one behind a shim pid the file used to record). Kill it —
+        // including the tree, which catches a still-live shim parent — and
+        // unlink. This branch intentionally bypasses the foreign-live
+        // refusal below: it IS a sidecar, but OUR leftover, so respawn.
+        this.deps.logger.warn(`found leftover sidecar pid=${pid} (cmdline matched); killing tree`);
+        try {
+          await this.deps.killTree(pid);
+        } catch (e) {
+          this.deps.logger.warn(`killTree(${pid}) failed: ${(e as Error).message}`);
+        }
+        fs.unlink(this.opts.pidFilePath);
+        return;
+      }
+      // cmdline unreadable but pid alive: fall through to the conservative
+      // refusal below — we cannot prove it is safe to spawn.
     }
     if (this.isForeignLivePid(pid)) {
       const message =
