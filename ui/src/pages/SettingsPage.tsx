@@ -3,7 +3,8 @@ import { useApp } from '../state/store';
 import { fetchRemoteModelIds, fetchRemoteModelsDetailed, fetchVisionModel,
   saveVisionModel } from '../state/live';
 import type { RemoteModelMeta } from '../state/live';
-import { CTX_LADDER, ctxHintText, formatCtx, followFetchedMeta, followPickedModel } from './modelDraft';
+import { CTX_LADDER, ctxHintText, formatCtx, followFetchedMeta, followPickedModel,
+  labelAfterManualModelInput } from './modelDraft';
 import { VENDOR_LABELS } from '../state/vendors';
 import type { ThinkingDepth, ThinkingDisplay } from '../types';
 import { Icon } from '../components/Icon';
@@ -45,7 +46,10 @@ function matchModels(ids: string[], q: string): string[] {
 
 /* ── Models tab ─────────────────────────────────────────────────── */
 interface ModelDraft {
+  /** 显示名称。用户可在「名称」格亲自命名（labelAuto=false）；否则跟着模型 id 自动走。 */
   label: string;
+  /** label 是否自动（跟着模型 id 走，没经过用户命名）。见 modelDraft.ts 的 DraftLike。 */
+  labelAuto: boolean;
   model: string;
   baseUrl: string;
   apiKeyEnv: string;
@@ -79,7 +83,8 @@ function fmtNum(n: number): string {
 
 function emptyDraft(): ModelDraft {
   return {
-    label: '', model: '', baseUrl: '', apiKeyEnv: '', provider: '',
+    // 新增模型：名称自动（跟着模型 id 走）。「名称」格一响应用户输入就转手动。
+    label: '', labelAuto: true, model: '', baseUrl: '', apiKeyEnv: '', provider: '',
     secret: '', maxTokens: '4096', timeoutSeconds: '180', vision: false,
     contextWindow: '128000', thinking: 'default', thinkingDepth: 'default',
     temperature: '', topP: ''
@@ -252,7 +257,22 @@ function ModelForm({ draft, setDraft, presets, showsKeyState, keyConfigured, bus
           </span>
         </label>
 
-        <div className="field mform__wide">
+        <label className="field mform__wide">
+          <span className="field__label">名称</span>
+          <input
+            className="input"
+            value={draft.label}
+            placeholder="展示用名称，可留空（默认与模型名一致）"
+            onChange={e => setDraft({ ...draft, label: e.target.value, labelAuto: false })}
+          />
+          <span className="field__hint">
+            {draft.labelAuto
+              ? '未命名时自动取模型名（如 qwen3.8-max），填了就用你填的。'
+              : '自定义名称。'}
+          </span>
+        </label>
+
+        <label className="field mform__wide">
           <span className="field__label">模型</span>
           <div className="mform__row">
             {/* 一直是可输入的输入框：列表只当建议，模型名随时能自己填、自己改。
@@ -269,7 +289,16 @@ function ModelForm({ draft, setDraft, presets, showsKeyState, keyConfigured, bus
                 onBlur={() => window.setTimeout(() => setListOpen(false), 120)}
                 onKeyDown={onModelKey}
                 onChange={e => {
-                  setDraft({ ...draft, model: e.target.value, label: draft.label || e.target.value });
+                  // 2026-10-14：手填模型 id 时**自动名称**要逐键跟着走。旧代码
+                  // `label: draft.label || e.target.value` 只在 label 为空时带值 ——
+                  // 敲 `qwen3.8-max` 的第一个字符 `q` 就把名称定死在 `q`（用户截图），
+                  // 拉过列表后名称又卡在列表第一项 minimax-m2.5。规则统一收在
+                  // modelDraft.labelAfterManualModelInput（labelAuto=false 时不动）。
+                  setDraft({
+                    ...draft,
+                    model: e.target.value,
+                    ...labelAfterManualModelInput(draft, e.target.value)
+                  });
                   setHi(0);
                   // 选过一次/按过回车之后接着改，也要能继续给建议
                   setListOpen(true);
@@ -323,7 +352,7 @@ function ModelForm({ draft, setDraft, presets, showsKeyState, keyConfigured, bus
                 ? `已获取 ${ids.length} 个模型，可搜索选择，也可以直接填名字；选中后窗口会自动带出来。`
                 : '从厂商接口获取可用模型；也可以跳过获取，直接填模型名。'}
           </span>
-        </div>
+        </label>
 
         <div className="mform__wide">
           <button
@@ -575,6 +604,8 @@ function ModelsTab() {
     // The key is deliberately not prefilled: the renderer does not have it.
     setDraft({
       label: m.name,
+      // 编辑已有模型：已保存的名称视为用户命名（手填模型 id 不覆盖它）。
+      labelAuto: false,
       model: m.model,
       baseUrl: m.baseUrl,
       apiKeyEnv: m.apiKeyEnv ?? '',

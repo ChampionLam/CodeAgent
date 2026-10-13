@@ -36,6 +36,10 @@ export function formatCtx(n: number | null | undefined): string {
 export interface DraftLike {
   model: string;
   label: string;
+  /** label 是不是「自动带出来的」（没经过用户命名）。true = 跟着模型 id 走；
+   *  省略 = 按旧口径推断（空、或等于当前 model 名才算自动）。
+   *  2026-10-14：没有这个标志，输入框逐键编辑时判断不了「label 是不是用户起的名」。 */
+  labelAuto?: boolean;
   contextWindow: string;
 }
 
@@ -47,10 +51,38 @@ export function followPickedModel(
   ctxTouched: boolean
 ): Partial<DraftLike> {
   const out: Partial<DraftLike> = { model: id };
-  if (!draft.label || draft.label === draft.model) out.label = id;
+  const labelAuto = draft.labelAuto ?? (!draft.label || draft.label === draft.model);
+  if (labelAuto) out.label = id;
   const ctx = meta?.[id]?.contextLength;
   if (!ctxTouched && typeof ctx === 'number' && ctx > 0) out.contextWindow = String(ctx);
   return out;
+}
+
+/** 「用户在手填模型 id」之后 label 该跟谁走（纯逻辑，带单测）。
+ *
+ *  2026-10-14 用户报了两条（原话）：
+ *  1) 「配置了模型，但是模型名称你是怎么定的」+ 截图里名称是单个字符 `q`：
+ *     旧代码 `label: draft.label || e.target.value`（SettingsPage 输入框 onChange）——
+ *     `||` 只在 label **为空**时才带值，于是手敲 `qwen3.8-max` 的**第一个字符 `q`**
+ *     就把 label 定死了，后面 11 个字符全不跟 → 名称永远停在 `q`。
+ *  2) 「点了获取模型列表之后，我下拉没有选，当时下拉第一个是 minimax-m2.5，然后
+ *     我手动输入了 glm-5.3，配置后模型名称变成 minimax-m2.5，但还有一行小字是
+ *     glm-5.3」：doFetch 拉回列表后若 `draft.model` 为空，会把 list[0]（列表第一项）
+ *     整套 followPickedModel 进草稿 → label=minimax-m2.5；用户手敲时 label 非空 →
+ *     不跟。保存 payload 的 `label.trim() || model.trim()` 同样只兜空值 → 名称与
+ *     模型 id 永久脱钩。
+ *
+ *  修法（口径）：**自动带出来的名称跟着手填的模型 id 逐键走；用户在「名称」格里
+ *  亲自起过的名（labelAuto=false）才不动。** 留空 = 保存时落模型 id 本身。
+ */
+export function labelAfterManualModelInput(
+  draft: DraftLike,
+  typedModel: string
+): Partial<DraftLike> {
+  const labelAuto = draft.labelAuto ?? (!draft.label || draft.label === draft.model);
+  if (!labelAuto) return {};
+  // 跟随手填值：包括清空（用户全选删掉重敲是常态，label 跟着清掉，保存时回落模型 id）。
+  return { label: typedModel.trim() };
 }
 
 /** 「上下文窗口」这格下面的说明文案（纯逻辑，带单测）。
