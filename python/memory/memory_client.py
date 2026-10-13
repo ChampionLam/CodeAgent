@@ -31,6 +31,7 @@ import threading
 import time
 
 from memory import memory_config
+import procflags
 from memory.memory_proc import (
     IDLE_THRESHOLD_SECONDS,
     MemoryProcess,
@@ -152,6 +153,9 @@ class MemoryEngine:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, env=env,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
+                # Windows 上不弹控制台黑窗；杀进程树/reap 走
+                # memory_proc 的原路（CREATE_NO_WINDOW 不动进程组）。
+                **procflags.no_window_kwargs(),
             )
         except OSError as exc:
             # Normalise to the supervisor's own error type so it can apply its
@@ -212,7 +216,8 @@ class MemoryEngine:
         try:
             proc = subprocess.run([exe, CONSOLIDATE_SUBCOMMAND], env=env,
                                   capture_output=True, text=True,
-                                  timeout=CONSOLIDATE_TIMEOUT)
+                                  timeout=CONSOLIDATE_TIMEOUT,
+                                  **procflags.no_window_kwargs())
         except Exception as exc:
             return {"status": "error", "detail": str(exc)}
         return {"status": "ok" if proc.returncode == 0 else "error",

@@ -47,3 +47,8 @@ python/models/decision_bert/calibrator*.json
 # 未来新增的其他模型目录：目录级兜底（本仓目前只有 decision_bert）
 python/models/*
 !python/models/decision_bert/
+
+# 嵌入模型（90.4MiB，小于 GitHub 100MiB 单文件硬线，随仓库分发以便离线/内网直用）
+python/models/bge-small-zh-v1.5/
+!python/models/bge-small-zh-v1.5/
+!python/models/bge-small-zh-v1.5/*

@@ -1,0 +1,25 @@
+# desk-agent 记忆引擎层（mnemosyne-memory,可选依赖）
+#
+# sidecar.py 的 _memory_hooks() 用 importlib.util.find_spec("mnemosyne")
+# 探测本包;没装时记忆钩子整体禁用(sidecar 照常起,应用必须能无记忆运行,
+# 与 guard/docs 层同口径:「可选」只表示缺了不影响进程启动)。
+#
+# 需要的是底层包 mnemosyne-memory(提供 `mnemosyne` 包与
+# `mnemosyne.mcp_server`),不是 mnemosyne-hermes(那是 Hermes Agent 用的
+# provider,本项目不用)。
+#
+# extras 口径:
+#   [mcp]        —— MCP stdio server 子进程(sidecar 用
+#                   `python -m mnemosyne.mcp_server --transport stdio` 启动)
+#   [embeddings] —— fastembed>=0.3.0 + sqlite-vec>=0.1.0(本地 ONNX 嵌入)
+#   明确不要 [llm] extra(llama-cpp/ctransformers 等):宿主已把
+#   MNEMOSYNE_LLM_ENABLED=false 钉死,LLM 路径永远不走。
+#
+# 嵌入模型 Qdrant/bge-small-zh-v1.5(~91MB)不由安装器下载:首次使用时
+# fastembed 经 HF_ENDPOINT 镜像懒加载(宿主 python/memory/memory_config.py
+# 的 build_env() 负责注入缓存目录等环境变量)。
+#
+# 实测可装组合(Python 3.12,清华镜像直装):
+#   mnemosyne-memory==3.15.1  fastembed==0.9.0
+
+mnemosyne-memory[mcp,embeddings]>=3.15.1
