@@ -60,6 +60,10 @@ function Extract-Function([string]$Name) {
 }
 $fnBlank = Extract-Function 'Assert-BlankConfig'
 $fnSweep = Extract-Function 'Invoke-CredentialSweep'
+# v23 (t_d37fca26): the two functions now call Test-SecretValue;
+# extract it too or the standalone runs break.
+$fnSecret = Extract-Function 'Test-SecretValue'
+Invoke-Expression $fnSecret
 Invoke-Expression $fnBlank
 Invoke-Expression $fnSweep
 
@@ -96,9 +100,11 @@ try {
     #     fire (extension is .bak-... not .json)... but the sk- sweep
     #     catches a literal key. Two sub-cases:
     # 4c-1. valued apiKey in a .json file -> sweep THROWS
+    #     (v23: value must be secret-shaped; a real key is >=16 chars,
+    #     so the fixture uses a realistic 40-char fake key.)
     $valuedJson = Join-Path $root "valuedjson"
     New-Item -ItemType Directory -Path $valuedJson -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $valuedJson "settings.json") -Value '{"apiKey":"abc123realkey"}'
+    Set-Content -LiteralPath (Join-Path $valuedJson "settings.json") -Value '{"apiKey":"abc123realkey0123456789xyz"}'
     $threw = $false; $msg = ""
     try { Assert-BlankConfig -InstallDir $valuedJson -EnvExistedBefore:$false -CfgExistedBefore:$false -ExampleJson $example }
     catch { $threw = $true; $msg = $_.Exception.Message }

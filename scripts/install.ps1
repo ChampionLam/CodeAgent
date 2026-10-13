@@ -603,6 +603,31 @@
 #        now enabled:false (spawn-guaranteed-to-fail placeholder
 #        path /path/to/allow/root + npx; field logs: mcp[filesystem]
 #        discover failed / exited during initialize).
+#   - v26 (task t_2d0783e3, 2026-10-13). DEFAULT WORKING DIRECTORY.
+#     Requirement (user, 2026-10-13, translated from Chinese): "the
+#     initial working directory defaults to <InstallDir>\workspace
+#     and can be changed by the user in a conversation". Fixes:
+#     a) New -WorkspaceDir param (explicit wins); default = resolved
+#        <InstallDir>\workspace. The installer CREATES it with a
+#        README.txt (UTF-8 no BOM) and writes the absolute path into
+#        config.json -> capabilities.workspaceRoot.
+#     b) Non-overwrite rule: an existing NON-EMPTY
+#        capabilities.workspaceRoot survives UNLESS this run passed
+#        -WorkspaceDir explicitly. Blank/absent -> filled with the
+#        default. capabilities section auto-created if missing
+#        (Add-Member, PS 5.1 safe).
+#     c) Atomic config write: temp file + Move-Item -Force. NOTE:
+#        [IO.File]::Replace(tmp, dst, $null) was the first attempt
+#        and REJECTS an empty backup-path string on .NET (caught by
+#        the local pwsh selfcheck, never shipped).
+#     d) Completion report prints the ACTUAL resolved workspace path
+#        + whether the config write happened ("workspace:" line).
+#     e) Engine side (same task, python/electron): new set_workspace
+#        tool + workspace.set RPC let the agent change the default
+#        in-conversation (persisted to the same config key); electron
+#        main.ts reads config.json capabilities.workspaceRoot as the
+#        default workspaceRoot for chat/hub/info instead of the
+#        hardcoded <userData>\workspace.
 param(
     [string]$InstallDir = "",
     # v7: unified package/archive directory. Defaults to
@@ -629,7 +654,7 @@ param(
     # cache at them, so the whole install directory can be moved or
     # deleted without leaving cache residue on the machine.
     [string]$CacheDir = "",
-    # v25 (t_2d0783e3): default working directory. Empty = the new default
+    # v26 (t_2d0783e3): default working directory. Empty = the new default
     # <InstallDir>\workspace. Explicit -WorkspaceDir "wins" (it is this run's
     # explicit user intent, so it IS written to config.json even when a
     # config.json already exists). With no -WorkspaceDir, an existing
@@ -4684,6 +4709,72 @@ if (Test-Path -LiteralPath $cfgDst) {
     } catch { $cfgIsBlank = $false }
 }
 
+# v26 (t_2d0783e3): default working directory. Resolve: explicit
+# -WorkspaceDir > <InstallDir>\workspace. Create it (plus a README
+# explaining what it is), then write the absolute path into
+# config.json's capabilities.workspaceRoot. Non-overwrite rule: an
+# existing non-empty capabilities.workspaceRoot survives UNLESS this
+# run passed -WorkspaceDir explicitly (explicit intent wins). Atomic
+# write via temp file + rename so a crash never leaves half a config.
+$workspaceDirDefault = Join-Path $InstallDir "workspace"
+$workspaceDir = if ($WorkspaceDir -and $WorkspaceDir.Trim()) { $WorkspaceDir.Trim() } else { $workspaceDirDefault }
+$workspaceDir = [Environment]::ExpandEnvironmentVariables($workspaceDir)
+$workspaceDir = [IO.Path]::GetFullPath($workspaceDir)   # absolute, rooted at the process cwd if drive-relative
+$Script:WorkspaceDirResolved = $workspaceDir
+$workspaceReadme = Join-Path $workspaceDir "README.txt"
+$workspaceReadmeText = @"
+This is the default working directory (workspace) for CodeAgent.
+
+Files the agent reads/writes with relative paths land here by default
+(read_file, write_file, run_shell cwd, ...). The setting lives in
+config.json -> capabilities.workspaceRoot and can be changed by asking
+the agent in a conversation ("switch the workspace to D:\whatever")
+or by editing config.json directly.
+"@
+if (-not (Test-Path -LiteralPath $workspaceDir)) {
+    New-Item -ItemType Directory -Path $workspaceDir -Force | Out-Null
+}
+if (-not (Test-Path -LiteralPath $workspaceReadme)) {
+    [IO.File]::WriteAllText($workspaceReadme, $workspaceReadmeText,
+        (New-Object Text.UTF8Encoding($false)))   # UTF-8 no BOM
+}
+# --- config.json: capabilities.workspaceRoot ---
+$workspaceWroteConfig = $false
+if (Test-Path -LiteralPath $cfgDst) {
+    $cfgWs = $null
+    try { $cfgWs = (Get-Content -LiteralPath $cfgDst -Raw | ConvertFrom-Json).capabilities.workspaceRoot } catch { $cfgWs = $null }
+    $existingWs = if ($cfgWs) { [string]$cfgWs } else { "" }
+    if ((-not $existingWs.Trim()) -or $WorkspaceDir) {
+        # blank/absent (fill with the default) or explicit -WorkspaceDir
+        # (explicit user intent wins over the stored value)
+        try {
+            $cfgWsObj = Get-Content -LiteralPath $cfgDst -Raw | ConvertFrom-Json
+            if (-not $cfgWsObj.capabilities) {
+                # PS 5.1: adding a property to $null only works via
+                # Add-Member on an existing object; create a fresh one.
+                $cfgWsObj | Add-Member -NotePropertyName capabilities -NotePropertyValue ([pscustomobject]@{}) -ErrorAction Stop
+            }
+            $capObj = $cfgWsObj.capabilities
+            if ($capObj.PSObject.Properties["workspaceRoot"]) {
+                $capObj.workspaceRoot = $workspaceDir
+            } else {
+                $capObj | Add-Member -NotePropertyName workspaceRoot -NotePropertyValue $workspaceDir -ErrorAction Stop
+            }
+            $wsJson = $cfgWsObj | ConvertTo-Json -Depth 32
+            $wsTmp = "$cfgDst.ws.tmp"
+            [IO.File]::WriteAllText($wsTmp, $wsJson, (New-Object Text.UTF8Encoding($false)))
+            # Atomic swap: [IO.File]::Replace(tmp, dst, $null) rejects an empty
+            # backup-path string on .NET (field-tested), so use Move-Item -Force
+            # (atomic rename on the same volume; the temp file sits next to the
+            # target, so it IS the same volume).
+            Move-Item -LiteralPath $wsTmp -Destination $cfgDst -Force
+            $workspaceWroteConfig = $true
+        } catch {
+            Write-Warning "[install] could not write capabilities.workspaceRoot to config.json: $_ (the workspace dir itself was created)"
+        }
+    }
+}
+
 # v21 (t_69654390): FINAL whole-tree credential sweep, after every
 # copy (app tree, node_modules, runtime, templates) has landed. This
 # is the acceptance line: "no sk- plaintext or valued apiKey anywhere
@@ -4711,11 +4802,34 @@ Invoke-CredentialSweep -Root $InstallDir -SkipFiles $finalSkip
 # prior stamp); otherwise read-only + warning. The uninstall-side
 # record still notes the resolved dataDir so -PurgeData can NAME the
 # dir, but purge still requires the ownership proof above.
-$Script:DataDirExplicit = [bool]($DataDir -and $DataDir.Trim())
+# v25 note: $Script:DataDirExplicit was resolved EARLY (right after
+# Confirm-InstallDir) -- since v25 $DataDir is never empty on the
+# install path, so the late recomputation below would always read
+# "explicit". Keep the variable, but use the EARLY value: the v22
+# ownership gate must distinguish real user intent from the new
+# in-tree default. With the default, ownership is proven by the
+# "inside the InstallDir" rule instead.
 $Script:ResolvedDataDir = (Resolve-DataDir $DataDir $InstallDir).DataDir
 Write-DataOwnershipMarkerIfOwned $Script:ResolvedDataDir $InstallDir
 @{ installed = $true; installedAt = (Get-Date).ToString("s"); installDir = $InstallDir; dataDir = $Script:ResolvedDataDir } |
     ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
+
+# v25 (t_27714fcb): legacy-user compatibility. If this install uses
+# the new in-tree default (<InstallDir>\data, does not exist yet)
+# while an OLD Electron-default dir (%APPDATA%\CodeAgent) exists and
+# is non-empty, we do NOT auto-move and do NOT delete anything -- the
+# task rule. One line in the final report points the user at it.
+$Script:LegacyDataHint = ""
+if (-not $Script:DataDirExplicit) {
+    $legacyDir = Join-Path $env:APPDATA $Script:AppDirName
+    if ((Test-PathSafe $legacyDir) -and -not (Test-PathSafe (Join-Path $InstallDir "data"))) {
+        $hasContent = $false
+        try { $hasContent = [bool](Get-ChildItem -LiteralPath $legacyDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { }
+        if ($hasContent) {
+            $Script:LegacyDataHint = "legacy"
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------
 # step 4: shortcuts
@@ -4746,7 +4860,16 @@ if (-not $NoShortcut) {
 Write-Host ""
 Write-Host "==================== install complete ===================="
 Write-Host "  app dir:     $InstallDir"
-Write-Host "  data dir:    $(if ($DataDir) { "$DataDir (via --user-data-dir; honored per v1 field test)" } else { "$env:APPDATA\$Script:AppDirName (Electron default userData)" })"
+# v26 (t_2d0783e3): the default working directory is part of the report
+# (requirement: print the ACTUAL resolved path). Also state whether the
+# config.json write happened, so "workspace exists but config didn't
+# land" is visible instead of silent.
+Write-Host "  workspace:   $Script:WorkspaceDirResolved$(if ($workspaceWroteConfig) { " (written to config.json -> capabilities.workspaceRoot)" } else { " (config.json left as-is -- existing workspaceRoot kept)" })"
+Write-Host "  data dir:    $Script:ResolvedDataDir$(if ($Script:DataDirExplicit) { " (explicit -DataDir; via --user-data-dir + DESK_AGENT_DATA_DIR)" } else { " (default: <InstallDir>\data -- sidecar logs/sessions.db; Chromium profile in <InstallDir>\userdata)" })"
+if ($Script:LegacyDataHint -eq "legacy") {
+    $legacyDir = Join-Path $env:APPDATA $Script:AppDirName
+    Write-Host "  note:        an old user data directory exists at $legacyDir -- this install does NOT use it; move it manually to $(Join-Path $InstallDir "data") if you want to keep those sessions"
+}
 if ($nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
     Write-Host "  node runtime: $nodeExe (for npm start fallback / rebuilds / tests)"
 } elseif (-not $NoNode) {

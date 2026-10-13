@@ -4,14 +4,14 @@ $ErrorActionPreference = "Stop"
 # (tests/docs/.github/tests-v10/backup-*/... NOT copied) plus
 # node_modules. Proves: no false positives on the real tree AND the
 # fixtures with fake sk- keys never arrive.
-$f = (Join-Path $PSScriptRoot "install.ps1")
+$f = (Resolve-Path (Join-Path $PSScriptRoot "..\install.ps1")).Path
 $errs = $null; $toks = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$toks, [ref]$errs)
 if ($errs.Count -gt 0) { throw "parse errors" }
 $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-CredentialSweep' }, $true)
 Invoke-Expression $fn.Extent.Text
 
-$src = (Split-Path -Parent $PSScriptRoot)
+$src = (Resolve-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "..")).Path
 $dst = Join-Path ([IO.Path]::GetTempPath()) ("v21dry-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $dst -Force | Out-Null
 
