@@ -29,6 +29,8 @@
  *   invoke  agent:flowsList        -> resources/flows/ 下的流程定义
  *   invoke  agent:flowsNext        -> 项目会话流程走一步（问答落库，不调模型）
  *   invoke  agent:usage            -> token/money aggregation (bar + usage page)
+ *   invoke  agent:logDescribe      -> 实际生效的日志目录 + 侧车状态 + 最近 [sidecar stderr] 摘要
+ *   invoke  agent:logOpen          -> { ok, path, reason? } 用系统文件管理器打开日志目录
  *   on      agent:event       -> every sidecar evt frame, { chatId, event, data }
  *   on      agent:status      -> status transitions
  */
@@ -38,8 +40,18 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import { SidecarClient } from "./sidecarClient";
 import { StdioTransport } from "./stdioTransport";
-import { defaultDeps } from "./deps";
+import { defaultDeps, type RuntimeDeps } from "./deps";
 import { LogSink, crashGuards, realLogDeps } from "./logSink";
+import {
+  STDERR_PREFIX,
+  STDERR_SCAN_LIMIT,
+  buildLogDescribe,
+  openLogDir,
+  resolveLogDirs,
+  sinkLogger,
+  type LogDescribeStatus,
+  type LogDirEntry,
+} from "./logAccess";
 
 let mainWindow: BrowserWindow | null = null;
 let client: SidecarClient | null = null;
@@ -55,6 +67,62 @@ function logSink(): LogSink {
     );
   }
   return mainLogSink;
+}
+
+/**
+ * 侧车数据目录 —— bootstrap 交给子进程的那个 DESK_AGENT_DATA_DIR。
+ * 侧车日志目录（<数据目录>/logs）由它派生，所以这里存的是「实际生效」的值。
+ */
+let sidecarDataDir = "";
+
+/** config.json 的 logging.logDir（侧车日志目录的第二优先级；读不到就 null）。 */
+function configLoggingDir(): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(projectRoot(), "config.json"), "utf-8")) as {
+      logging?: { logDir?: unknown };
+    };
+    const dir = raw?.logging?.logDir;
+    return typeof dir === "string" && dir.trim() ? dir.trim() : null;
+  } catch {
+    return null; // 没有 / 坏了都回 null，绝不挡日志入口
+  }
+}
+
+/**
+ * 侧车客户端的依赖：日志多接一路。
+ *
+ * 以前侧车的输出（[sidecar stderr] / RPC 超时 / 心跳判死）只进控制台，用户
+ * 界面里查不到 —— 而「为什么崩」恰恰全在这些行里。包一层写进 LogSink：
+ * 既落 <userData>/logs 的 JSONL，又能被设置页的日志区取到。
+ */
+function sidecarDeps(): RuntimeDeps {
+  const base = defaultDeps();
+  return { ...base, logger: sinkLogger(base.logger, logSink()) };
+}
+
+/**
+ * 界面要展示的日志目录（每次现算，跟运行中的 sidecar 同优先级）：
+ * 主进程那份取 LogSink 实际用的目录；侧车那份按 sidecar.py 的口径 ——
+ * DESK_AGENT_LOG_DIR > config.json logging.logDir > <数据目录>/logs。
+ */
+function currentLogDirs(): LogDirEntry[] {
+  return resolveLogDirs({
+    mainLogDir: logSink().logDir,
+    sidecarDataDir: sidecarDataDir || userDataSubdir("data"),
+    sidecarLogDirOverride: process.env.DESK_AGENT_LOG_DIR,
+    configLogDir: configLoggingDir(),
+    cwd: projectRoot(),
+    platform: process.platform,
+  });
+}
+
+/** 目录在不在（读不到就当没有：界面少一句提示，不该让整块报错）。 */
+function dirExists(dir: string): boolean {
+  try {
+    return fs.existsSync(dir);
+  } catch {
+    return false;
+  }
 }
 
 
@@ -657,6 +725,11 @@ async function bootstrap(): Promise<void> {
   // t_5d29bcab: the tail arg is the sidecar script path — the identity
   // anchor for leftover-pid validation (see getSidecarCommand).
   const script = args[args.length - 1];
+  // 侧车的数据目录：v24 (t_27714fcb) 起尊重继承来的 DESK_AGENT_DATA_DIR
+  // （CodeAgent.bat 传 <InstallDir>\data），否则退回 <userData>\data。
+  // 存进模块变量：日志区要按「实际生效」的那个值算侧车日志目录。
+  sidecarDataDir = process.env.DESK_AGENT_DATA_DIR || userDataSubdir("data");
+  const deps = sidecarDeps();
   logSink().info("bootstrap: starting sidecar", { data: { command } });
   client = new SidecarClient({
     transportFactory: () => new StdioTransport({
@@ -664,15 +737,11 @@ async function bootstrap(): Promise<void> {
       args,
       cwd: projectRoot(),
       // The sidecar keeps its sqlite audit db + attachment store under this dir.
-      // v24 (t_27714fcb): respect an inherited DESK_AGENT_DATA_DIR (set by the
-      // CodeAgent.bat launcher as <InstallDir>\data) instead of always
-      // overriding it with <userData>\data. No inherited value -> legacy
-      // behavior preserved (<userData>\data, incl. %APPDATA%\CodeAgent\data).
-      env: { ...process.env, DESK_AGENT_DATA_DIR: process.env.DESK_AGENT_DATA_DIR || userDataSubdir("data") },
+      env: { ...process.env, DESK_AGENT_DATA_DIR: sidecarDataDir },
       windowsHide: true, // R2
-      spawner: defaultDeps().spawner,
+      spawner: deps.spawner,
     }),
-    deps: defaultDeps(),
+    deps,
     pidFilePath: path.join(app.getPath("userData"), "sidecar.pid"),
     // t_5d29bcab: identity anchor for leftover-pid validation — the script
     // the transport spawns is exactly the path we hand it here.
@@ -839,6 +908,40 @@ async function bootstrap(): Promise<void> {
 
   ipcMain.handle("agent:usage", async (_e, payload?: Record<string, unknown>) =>
     requireClient().request("usage.summary", payload));
+
+  // ── 日志入口（2026-10-14）──────────────────────────────────────────────
+  // 用户口径：「程序有问题都可以找到」。设置页的「日志」区读这两条：
+  //   agent:logDescribe -> 实际生效的日志目录（主进程 + 侧车，实际同一个时只给
+  //                        一条）+ 侧车状态（lastError / 重启次数）+ 最近
+  //                        [sidecar stderr] 摘要（崩溃原因就在那几行里）
+  //   agent:logOpen     -> 用系统文件管理器（shell.openPath）打开其中一个；
+  //                        只认 main / sidecar，渲染层递不进任意路径
+  ipcMain.handle("agent:logDescribe", async () => {
+    let status: LogDescribeStatus | null = null;
+    try {
+      status = client ? client.getStatus() : null;
+    } catch {
+      status = null; // 状态取不到不该让日志入口整个不可用
+    }
+    return buildLogDescribe({
+      dirs: currentLogDirs(),
+      exists: dirExists,
+      status,
+      // 内存环里翻最近的侧车输出：级别调到 error 也照样有（tailByPrefix 走环）。
+      stderrLines: logSink().tailByPrefix(STDERR_PREFIX, STDERR_SCAN_LIMIT),
+    });
+  });
+
+  ipcMain.handle("agent:logOpen", async (_e, kind?: unknown) => {
+    if (kind !== "main" && kind !== "sidecar") return { ok: false, reason: "bad-kind" };
+    return openLogDir(currentLogDirs(), kind, {
+      openPath: (target: string) => shell.openPath(target),
+      exists: dirExists,
+      // 目录还没生成时先建出来：否则文件管理器直接报「找不到路径」，
+      // 用户拿到一个点不开的按钮（第一次写日志才会建目录）。
+      mkdir: (dir: string) => { fs.mkdirSync(dir, { recursive: true }); },
+    });
+  });
 
   // Window buttons for the frameless TopBar (minimise / maximise / close).
   ipcMain.handle("win:action", (e, action?: string) => {

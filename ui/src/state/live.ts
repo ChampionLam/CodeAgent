@@ -48,10 +48,48 @@ export interface SidecarEvent {
   data: Record<string, unknown>;
 }
 
+/* ── 设置页「日志」区（主进程 agent:logDescribe / agent:logOpen）───────────
+ * 与 electron/preload.ts 的 LogDescribeLike 同形状：路径由主进程解析，这里只
+ * 负责显示 / 复制 / 打开。 */
+export interface LogDirEntry {
+  kind: 'main' | 'sidecar';
+  label: string;
+  /** 绝对路径。 */
+  path: string;
+  /** 目录是否已经生成（第一次写日志时才建）。 */
+  exists: boolean;
+}
+
+/** 侧车状态（日志区要在失败时把原因说清）。 */
+export interface LogSidecarState {
+  state: string;
+  restartAttempts: number;
+  lastError: { code: string; message: string } | null;
+}
+
+export interface LogDescribe {
+  dirs: LogDirEntry[];
+  sidecar: LogSidecarState | null;
+  /** 最近几行侧车输出摘要（已剥前缀、已截断）。 */
+  stderrTail: string[];
+}
+
+/** 最近一次模型接口报错（日志区把它摆出来，用户不用只看到「下拉为空」）。 */
+export interface LogNotice {
+  label: string;
+  message: string;
+  at: number;
+}
+
 export interface AgentApi {
   onStatus(cb: (s: SidecarStatus) => void): () => void;
   getStatus(): Promise<SidecarStatus>;
   info?(): Promise<unknown>;
+  /** 设置页「日志」区：实际生效的日志目录 + 侧车状态 + 最近侧车输出摘要。 */
+  logs?: {
+    describe(): Promise<LogDescribe>;
+    open(kind: 'main' | 'sidecar'): Promise<{ ok: boolean; path?: string; reason?: string }>;
+  };
   tools(): Promise<ToolListPayload>;
   /** 技能与工具面板：sidecar 返回全部已加载技能（只读展示）。 */
   skills?(): Promise<SkillListPayload>;

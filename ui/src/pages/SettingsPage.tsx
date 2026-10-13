@@ -8,6 +8,8 @@ import { CTX_LADDER, ctxHintText, formatCtx, followFetchedMeta, followPickedMode
 import { VENDOR_LABELS } from '../state/vendors';
 import type { ThinkingDepth, ThinkingDisplay } from '../types';
 import { Icon } from '../components/Icon';
+import { LogsPanel } from './LogsPanel';
+import { reportInterfaceError } from './logPanel';
 import './SettingsPage.css';
 
 type Tab = 'models';
@@ -179,7 +181,9 @@ function ModelForm({ draft, setDraft, presets, showsKeyState, keyConfigured, bus
       }
     } catch (e) {
       setIds([]);
-      setFetchErr(e instanceof Error ? e.message : '获取模型列表失败');
+      const msg = e instanceof Error ? e.message : '获取模型列表失败';
+      setFetchErr(msg);
+      reportInterfaceError('获取模型列表', msg);
     } finally {
       setFetching(false);
     }
@@ -577,6 +581,12 @@ function ModelsTab() {
     return () => { alive = false; };
   }, []);
 
+  /* 模型列表读不出来（多半是侧车还没 ready）：也报给日志区 —— 用户在那里能看到
+     原因和日志目录，而不是只盯着空列表。 */
+  useEffect(() => {
+    if (modelsError) reportInterfaceError('读取模型列表', modelsError);
+  }, [modelsError]);
+
   useEffect(() => {
     if (editing !== 'new') return;
     const onKey = (e: KeyboardEvent) => {
@@ -655,7 +665,9 @@ function ModelsTab() {
         setDraft(d => ({ ...d, ...followFetchedMeta(d, fetchedMeta, ctxTouched) }));
         setCanSkip(false);
       } catch (e) {
-        setError(`校验未通过：${e instanceof Error ? e.message : '无法获取模型列表'}`);
+        const msg = e instanceof Error ? e.message : '无法获取模型列表';
+        setError(`校验未通过：${msg}`);
+        reportInterfaceError('校验模型', msg);
         setCanSkip(true);
         setChecking(false);
         return;
@@ -727,7 +739,9 @@ function ModelsTab() {
       setDraft(emptyDraft());
     } catch (e) {
       // Sidecar rejects with MODEL_INVALID + per-field message; surface it raw.
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      reportInterfaceError('保存模型', msg);
     } finally {
       setBusy(false);
     }
@@ -741,7 +755,9 @@ function ModelsTab() {
       setNotice(`已删除模型：${id}`);
       if (editing === id) setEditing(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      reportInterfaceError('删除模型', msg);
     }
   };
 
@@ -752,7 +768,9 @@ function ModelsTab() {
       await setDefaultModel(id);
       setNotice(`全局默认已切换为：${id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      reportInterfaceError('设为默认', msg);
     }
   };
 
@@ -1045,6 +1063,9 @@ export function SettingsPage() {
 
       <div className="settings-body">
         {/* 只剩一个 tab：不画 tab 头，直接展示内容 */}
+        {/* 日志区摆在最上面（2026-10-14）：程序出问题时，用户在这个页面第一眼
+            就能看到日志目录、以及「为什么没起来」 —— 不用先翻到模型列表下面。 */}
+        <LogsPanel />
         <ModelsTab />
       </div>
     </div>

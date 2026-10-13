@@ -25,6 +25,29 @@ export interface SidecarEventLike {
   data: Record<string, unknown>;
 }
 
+/** 一个日志目录（设置页「日志」区显示 + 打开）。 */
+export interface LogDirEntryLike {
+  kind: "main" | "sidecar";
+  label: string;
+  /** 绝对路径 —— 直接显示给用户、也让他复制给别人。 */
+  path: string;
+  /** 目录是否已经生成（第一次写日志时才建）。 */
+  exists: boolean;
+}
+
+/** 设置页日志区的一整份载荷（主进程 agent:logDescribe）。 */
+export interface LogDescribeLike {
+  dirs: LogDirEntryLike[];
+  /** 侧车状态：state / 重启次数 / 最后一次错误。client 还没起来时是 null。 */
+  sidecar: {
+    state: string;
+    restartAttempts: number;
+    lastError: { code: string; message: string } | null;
+  } | null;
+  /** 最近几行 [sidecar stderr] 摘要（已剥前缀、已截断）。 */
+  stderrTail: string[];
+}
+
 export interface ChatParams {
   messages: Array<Record<string, unknown>>;
   images?: string[];
@@ -52,6 +75,25 @@ const api = {
   },
   async info(): Promise<unknown> {
     return ipcRenderer.invoke("agent:info");
+  },
+
+  /**
+   * 日志入口（设置页「日志」区）：
+   *   describe() -> 实际生效的日志目录（主进程 + 侧车）+ 侧车状态 + 最近侧车输出摘要。
+   *   路径由主进程解析，渲染层只显示 / 复制，不自己拼。
+   */
+  logs: {
+    async describe(): Promise<LogDescribeLike> {
+      return ipcRenderer.invoke("agent:logDescribe") as Promise<LogDescribeLike>;
+    },
+    /** 用系统文件管理器打开日志目录；kind 只认 main / sidecar。 */
+    async open(kind: "main" | "sidecar"): Promise<{ ok: boolean; path?: string; reason?: string }> {
+      return ipcRenderer.invoke("agent:logOpen", kind) as Promise<{
+        ok: boolean;
+        path?: string;
+        reason?: string;
+      }>;
+    },
   },
 
   /**

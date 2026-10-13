@@ -80,7 +80,7 @@ export class LogSink {
   private swept = false;
 
   constructor(
-    private readonly logDir: string,
+    private readonly logDirPath: string,
     deps: LogSinkDeps,
     level: LogLevel = "info",
     private readonly retentionDays = RETENTION_DAYS_DEFAULT,
@@ -89,6 +89,29 @@ export class LogSink {
     this.deps = deps;
   }
   private readonly deps: LogSinkDeps;
+
+  /**
+   * 实际使用的日志目录 —— 界面显示 / 打开文件管理器都用它，绝不在别处重算
+   * 一遍（「以实际生效的路径为准」：重算就可能显示一个空目录）。
+   */
+  get logDir(): string {
+    return this.logDirPath;
+  }
+
+  /**
+   * 最近的、以 prefix 开头的日志行（按时间正序）。
+   *
+   * 走内存环，所以**不受落盘级别过滤影响**：级别调到 error 之后，侧车崩溃前
+   * 那些 info 级 stderr 行照样能翻出来 —— 而崩溃现场恰恰是这些行。
+   */
+  tailByPrefix(prefix: string, limit: number): string[] {
+    if (!(limit > 0)) return [];
+    const out: string[] = [];
+    for (const rec of this.ring) {
+      if (rec.msg.startsWith(prefix)) out.push(rec.msg);
+    }
+    return out.slice(-limit);
+  }
 
   static resolveLevel(envLevel: string | undefined, configLevel?: unknown): LogLevel {
     return (
@@ -133,12 +156,12 @@ export class LogSink {
   error(msg: string, opts?: Parameters<LogSink["log"]>[2]): void { this.log("error", msg, opts); }
 
   private async writeLine(rec: LogRecord): Promise<void> {
-    await this.deps.mkdir(this.logDir).catch(() => undefined);
+    await this.deps.mkdir(this.logDirPath).catch(() => undefined);
     if (!this.swept) {
       this.swept = true;
       await this.sweepStale().catch(() => undefined);
     }
-    const file = path.join(this.logDir, `agent-${dayStamp()}.log`);
+    const file = path.join(this.logDirPath, `agent-${dayStamp()}.log`);
     await this.deps.appendFile(file, JSON.stringify(rec) + "\n");
   }
 
@@ -149,10 +172,10 @@ export class LogSink {
 
   private async sweepStale(): Promise<void> {
     const cutoff = Date.now() - this.retentionDays * 86400_000;
-    const names = await this.deps.readdir(this.logDir);
+    const names = await this.deps.readdir(this.logDirPath);
     const crashes: [string, number][] = [];
     for (const n of names) {
-      const p = path.join(this.logDir, n);
+      const p = path.join(this.logDirPath, n);
       if (n.startsWith("agent-")) {
         const st = await this.deps.stat(p).catch(() => null);
         if (st && st.mtimeMs < cutoff) await this.deps.unlink(p).catch(() => undefined);
@@ -183,8 +206,8 @@ export class LogSink {
     ];
     const body = lines.join("\n") + "\n";
     try {
-      await this.deps.mkdir(this.logDir);
-      const p = path.join(this.logDir, `crash-${ts}.log`);
+      await this.deps.mkdir(this.logDirPath);
+      const p = path.join(this.logDirPath, `crash-${ts}.log`);
       await this.deps.writeFile(p, body);
       this.log("error", `crash: ${title}`, { source: opts.source ?? "electron", data: { stack: stack?.slice(0, MAX_DATA_JSON) } });
       return p;
