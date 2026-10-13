@@ -48,7 +48,15 @@ export interface SidecarClientOptions {
   readonly pidFilePath?: string;
   /** Total handshake timeout in ms. Default 45000 per spec. */
   readonly handshakeTimeoutMs?: number;
-  /** Per-request RPC timeout in ms. Default 10000. */
+  /**
+   * Per-request RPC timeout in ms. Default 30000.
+   *
+   * 必须大于侧车网络请求的 HTTP 超时（15 秒），否则界面拿不到厂商真实错误：
+   * 侧车对 /models 这类厂商调用有自己的 HTTP 超时（15s），超了会返回带
+   * 状态码/原因的错误响应。如果本 RPC 超时先到，界面只会看到「timed out」，
+   * 厂商的真实错误（401/429/网络断开等）被吞掉 —— 这正是 2026-10-13 用户
+   * 在「添加模型」对话框里踩到的坑。10s 时代（2026-10 之前）就是这样。
+   */
   readonly requestTimeoutMs?: number;
   /** Heartbeat interval in ms. Default 5000. */
   readonly heartbeatIntervalMs?: number;
@@ -72,6 +80,8 @@ interface PendingRequest {
   readonly reject: (reason: Error) => void;
   readonly timer: NodeJS.Timeout;
   readonly method: string;
+  /** deps.clock.now() when the request was sent — timeout log diagnostics. */
+  readonly sentAt: number;
 }
 
 type StatusListener = (status: SidecarStatus) => void;
@@ -157,7 +167,9 @@ export class SidecarClient {
       // the defaults here would silently ignore test overrides (and any
       // production wiring that deviates from the spec defaults).
       handshakeTimeoutMs: opts.handshakeTimeoutMs ?? 45_000,
-      requestTimeoutMs: opts.requestTimeoutMs ?? 10_000,
+      // 必须大于侧车网络请求的 HTTP 超时（15 秒），否则界面拿不到厂商真实错误。
+      // 详见 SidecarClientOptions.requestTimeoutMs 的注释。
+      requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
       heartbeatIntervalMs: opts.heartbeatIntervalMs ?? 5_000,
       heartbeatTimeoutMs: opts.heartbeatTimeoutMs ?? 8_000,
       maxRestarts: opts.maxRestarts ?? 3,
@@ -397,14 +409,27 @@ export class SidecarClient {
   async request(
     method: string,
     params: Record<string, unknown> = {},
-    opts?: { id?: string },
+    opts?: { id?: string; timeoutMs?: number },
   ): Promise<Record<string, unknown>> {
     if (!this.transport || this.status.state !== "ready") {
-      throw new SidecarRpcError(ErrorCode.SIDECAR_DEAD, `sidecar not ready: ${this.status.state}`);
+      // 把「为什么不 ready」带上：用户实际踩到的是侧车 crashed（重启 3 次
+      // 全秒死），旧消息只有 "sidecar not ready: crashed" 一句，什么线索
+      // 都没有。lastError 里有 exit code / 具体失败原因，带上它，界面才
+      // 显示得出来（2026-10-13）。
+      const last = this.status.lastError;
+      const why = last ? ` (${last.code}: ${last.message})` : "";
+      throw new SidecarRpcError(
+        ErrorCode.SIDECAR_DEAD,
+        `sidecar not ready: ${this.status.state}${why}`,
+      );
     }
     // Caller-supplied id lets the UI correlate a long-lived stream (e.g. a
     // chat) with the request that started it, so `chat.cancel` can name it.
     const id = opts?.id ?? randomUUID();
+    // Per-call timeout: network-shaped RPCs (models.fetch) pass an explicit
+    // longer value; local RPCs (tens of ms) keep the default. Must stay > the
+    // sidecar's own HTTP timeout (15s) so the vendor's real error wins.
+    const timeoutMs = opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : this.opts.requestTimeoutMs;
     const frame: RequestFrame = {
       type: "req",
       id,
@@ -413,10 +438,26 @@ export class SidecarClient {
     };
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = this.deps.clock.setTimeout(() => {
+        // pending 数取删自己**之前**的值：读者要的是"包括这个超时请求
+        // 在内，当时有几个在飞"；其它还在等的请求另列在 still waiting 里。
+        const pendingCount = this.pending.size;
         this.pending.delete(id);
+        // 抛出之前必须留日志（2026-10-13 用户明确要求「程序有问题都可以找
+        // 到」）：方法名、等了多久、当时还有几个请求在飞、侧车什么状态。
+        // 之前这条路径完全静默，超时了界面只有一句 timed out，日志里什么
+        // 都查不到。pending 数先删再读（把自己从计数里去掉），读者要的是
+        // 「除了它还有谁在等」。
+        const waited = this.deps.clock.now() - sentAt;
+        this.deps.logger.warn(
+          `RPC timeout: request '${method}' timed out after ${timeoutMs}ms ` +
+          `(waited ${waited}ms); pending=${pendingCount} (incl. this one), ` +
+          `sidecar=${this.status.state}` +
+          (this.pending.size ? `, still waiting: ${Array.from(this.pending.values()).map(p => p.method).join(",")}` : ""),
+        );
         reject(new SidecarRpcError(ErrorCode.TIMEOUT, `request '${method}' timed out`));
-      }, this.opts.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method });
+      }, timeoutMs);
+      const sentAt = this.deps.clock.now();
+      this.pending.set(id, { resolve, reject, timer, method, sentAt });
       try {
         this.transport!.send(frame);
       } catch (e) {
@@ -558,7 +599,19 @@ export class SidecarClient {
       this.heartbeatWatchdog = this.deps.clock.setTimeout(() => {
         this.heartbeatWatchdog = null;
         const sinceLast = this.deps.clock.now() - this.lastPingSent;
-        this.deps.logger.warn(`heartbeat pong missing (${sinceLast}ms); declaring dead`);
+        // 「pong 没到」不等于侧车死了：一个慢请求（如 models.fetch 在飞）
+        // 把 stdio 响应拖住时心跳也会缺。把在飞请求列出来，一眼能分清
+        // 「慢请求」还是「真死」（2026-10-13）。
+        const inflight = this.pending.size > 1
+          ? `; ${this.pending.size - 1} other request(s) in flight: ${
+              Array.from(this.pending.values())
+                .filter(p => p.method !== "ping")
+                .map(p => `${p.method}(${this.deps.clock.now() - p.sentAt}ms)`)
+                .join(", ")}`
+          : "";
+        this.deps.logger.warn(
+          `heartbeat pong missing (${sinceLast}ms); declaring dead${inflight}`,
+        );
         this.handleTransportClose(null, null).catch(() => { /* root */ });
       }, this.opts.heartbeatTimeoutMs);
       // Reset watchdog when pong resolves.
