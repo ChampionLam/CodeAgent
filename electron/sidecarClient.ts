@@ -113,6 +113,13 @@ export class SidecarClient {
   private heartbeatTimer: number | null = null;
   private heartbeatWatchdog: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
+  /**
+   * Resolver of the in-flight restart-backoff wait, if any. stop() uses it
+   * to settle the wait when it clears the timer: without this, the promise
+   * inside handleTransportClose would dangle forever (its timer is gone, so
+   * nothing ever resolves it) and the async call frame leaks.
+   */
+  private restartWaitResolve: (() => void) | null = null;
   private stopping = false;
   private restartCount = 0;
   private lastPingSent = 0;
@@ -255,6 +262,20 @@ export class SidecarClient {
    * max-restarts ceiling.
    */
   private async restartTransport(): Promise<void> {
+    // Restart racing a terminal state: if the client was stopped (or gave up
+    // after max-restarts) while this restart was in flight, do NOT spawn a
+    // new sidecar — it would have no owner and would outlive the host
+    // process (its open stdio pipes keep the event loop alive; t_5d29bcab).
+    if (this.stopping) {
+      this.deps.logger.info("restartTransport aborted: stopping is set");
+      return;
+    }
+    if (this.status.state === "stopped" || this.status.state === "crashed") {
+      this.deps.logger.info(
+        `restartTransport aborted: client is ${this.status.state}`,
+      );
+      return;
+    }
     if (this.transport) {
       try { await this.transport.close(); } catch { /* ignore */ }
       this.transport = null;
@@ -312,6 +333,13 @@ export class SidecarClient {
     if (this.restartTimer) {
       this.deps.clock.clearTimeout(this.restartTimer);
       this.restartTimer = null;
+    }
+    if (this.restartWaitResolve) {
+      // Settle the dangling backoff wait so handleTransportClose's async
+      // frame completes (its `stopping` check then aborts the respawn).
+      const r = this.restartWaitResolve;
+      this.restartWaitResolve = null;
+      r();
     }
     // Reject all pending requests.
     for (const [, p] of this.pending) {
@@ -614,9 +642,21 @@ export class SidecarClient {
     });
     this.deps.logger.info(`restarting in ${backoff}ms (attempt ${this.restartCount})`);
     await new Promise<void>((r) => {
+      this.restartWaitResolve = r;
       this.restartTimer = this.deps.clock.setTimeout(r, backoff);
     });
+    this.restartWaitResolve = null;
+    // Terminal states (stopped by user, crashed after max-restarts) must
+    // abort the restart loop: respawning now would create a sidecar nobody
+    // owns — its open stdio pipes keep the host process alive and the
+    // leftover process outlives the app (t_5d29bcab hang).
     if (this.stopping) return;
+    if (this.status.state === "stopped" || this.status.state === "crashed") {
+      this.deps.logger.info(
+        `restart aborted: client is ${this.status.state}; not respawning`,
+      );
+      return;
+    }
     try {
       // restartTransport() preserves restartCount so consecutive failures
       // accumulate toward maxRestarts. A reset would defeat the cap.

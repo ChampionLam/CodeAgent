@@ -404,6 +404,111 @@ class TestApplyLocal(UpdaterTestBase):
         # 回滚后：旧版本还在原位
         self.assertEqual(updater.read_current_version(), "0.1.0")
 
+    # ---- v25 (t_27714fcb)：用户数据目录进安装树 → 更新必须原样带过去 ----
+
+    def _mk_user_tree(self, version_tag: str = "v1") -> None:
+        """在安装树内造 <root>/data 与 <root>/userdata（含 bytes 级校验点）。"""
+        for rel, content in (
+            ("data/sessions.db", f"SESSIONS-{version_tag}"),
+            ("data/logs/app.log", f"LOG-{version_tag}"),
+            ("data/audit.db", f"AUDIT-{version_tag}"),
+            ("userdata/Preferences", f"PREFS-{version_tag}"),
+            ("userdata/Cache/000003", f"CACHE-{version_tag}"),
+        ):
+            full = os.path.join(self.root, rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as f:
+                f.write(content.encode())
+
+    def _snapshot(self, base: str) -> dict:
+        snap = {}
+        for base_dir, _dirs, files in os.walk(base):
+            for fn in files:
+                full = os.path.join(base_dir, fn)
+                with open(full, "rb") as f:
+                    snap[os.path.relpath(full, base)] = f.read()
+        return snap
+
+    def test_user_tree_carried_untouched_across_update(self):
+        """核心单测：安装树内含 data\\sessions.db → 更新解包后字节不变。
+
+        对应任务验收第 2 条：构造含 data/sessions.db 的假安装树，
+        跑更新（apply_local），断言该文件字节不变且仍在 <root>/data。
+        """
+        self._mk_user_tree("v1")
+        before = self._snapshot(os.path.join(self.root, "data"))
+        before_ud = self._snapshot(os.path.join(self.root, "userdata"))
+
+        res = updater.apply_local(self._new_pkg_dir("0.2.0"))
+        self.assertTrue(res["applied"])
+        self.assertEqual(res["newVersion"], "0.2.0")
+
+        # data/ 与 userdata/ 原位、字节不变
+        after = self._snapshot(os.path.join(self.root, "data"))
+        after_ud = self._snapshot(os.path.join(self.root, "userdata"))
+        self.assertEqual(after, before)
+        self.assertEqual(after_ud, before_ud)
+        with open(os.path.join(self.root, "data", "sessions.db"), "rb") as f:
+            self.assertEqual(f.read(), b"SESSIONS-v1")
+        # 程序本体确实换了版本
+        self.assertEqual(updater.read_current_version(), "0.2.0")
+
+    def test_userdata_also_carried(self):
+        self._mk_user_tree("v1")
+        updater.apply_local(self._new_pkg_dir("0.7.0"))
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.root, "userdata", "Preferences")))
+        with open(os.path.join(self.root, "userdata", "Preferences"), "rb") as f:
+            self.assertEqual(f.read(), b"PREFS-v1")
+
+    def test_user_tree_survives_rollback(self):
+        """回滚路径：更新失败后用户目录跟旧版本一起回到原位。"""
+        self._mk_user_tree("v1")
+        d = self._new_pkg_dir("0.5.0")
+        orig = updater._rename_with_retry
+        root = updater._repo_root()
+        state = {"fired": False}
+
+        def boom(src, dst):
+            # carry 阶段把 data 从 backup 搬回 root 时模拟 Windows 占用；
+            # 只炸这一次（回滚路径的 rename 必须全部放行）。
+            if not state["fired"] \
+                    and os.path.abspath(dst) == os.path.join(
+                        os.path.abspath(root), "data"):
+                state["fired"] = True
+                raise updater.UpdaterError("RENAME_FAIL", "carry lock")
+            return orig(src, dst)
+
+        updater._rename_with_retry = boom
+        try:
+            with self.assertRaises(updater.UpdaterError):
+                updater.apply_local(d)      # carry 阶段炸 → 整体回滚
+        finally:
+            updater._rename_with_retry = orig
+        self.assertTrue(state["fired"], "injection never fired")
+        # 回滚完成后：用户数据原位且字节不变
+        with open(os.path.join(self.root, "data", "sessions.db"), "rb") as f:
+            self.assertEqual(f.read(), b"SESSIONS-v1")
+        self.assertEqual(updater.read_current_version(), "0.1.0")
+
+    def test_package_with_userdata_prefix_rejected(self):
+        """包顶层带 userdata/ 目录 → 黑名单拒绝（与 data/ 同一硬规则）。
+
+        注：黑名单前缀只看顶层段（既有语义，与 data/ 一致）；
+        版本目录内嵌的 userdata/ 走 carry 的 destination-exists
+        防御分支（不覆盖、留在 backup）。
+        """
+        z = os.path.join(self.sandbox, "evil.zip")
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr("package.json",
+                        json.dumps({"name": "codeagent", "version": "0.8.0"}))
+            zf.writestr("main.py", "# evil")
+            zf.writestr("userdata/Preferences", "x")
+        with self.assertRaises(updater.UpdaterError) as ctx:
+            updater.apply_local(z)
+        self.assertEqual(ctx.exception.code, "WITH_USER_DATA")
+        self.assertEqual(updater.read_current_version(), "0.1.0")
+
 
 class TestRpcDispatch(UpdaterTestBase):
     """真 handle_request 路由（协议版本按 R3 要求带上）。"""

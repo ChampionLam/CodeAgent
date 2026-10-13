@@ -22,7 +22,15 @@ function pyBin(): string {
   return fs.existsSync(venv) ? venv : "python3";
 }
 
-async function startClient(dataDir: string, pidFile: string): Promise<SidecarClient> {
+async function startClient(dataDir: string, pidFile: string): Promise<{
+  client: SidecarClient;
+  started: Promise<void>;
+}> {
+  // Return the client together with its start() promise so a FAILED start
+  // can still be stopped: `await client.start()` throws while the client
+  // keeps a background restart loop alive, and the caller loses the only
+  // reference it ever had (t_5d29bcab hang: node --test never exited
+  // because the respawned sidecar kept stdio pipes open).
   const client = new SidecarClient({
     transportFactory: () => new StdioTransport({
       command: pyBin(),
@@ -37,17 +45,20 @@ async function startClient(dataDir: string, pidFile: string): Promise<SidecarCli
     sidecarScriptPath: SCRIPT,
     handshakeTimeoutMs: 30_000,
   });
-  await client.start();
-  return client;
+  const started = client.start();
+  return { client, started };
 }
 
 test("t_5d29bcab smoke: pid file records hello pid; duplicate is locked out", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t5d29bcab-smoke-"));
+  try {
   const dataDir = path.join(tmp, "data");
   fs.mkdirSync(dataDir, { recursive: true });
   const pidFile = path.join(tmp, "sidecar.pid");
 
-  const c1 = await startClient(dataDir, pidFile);
+  const first = await startClient(dataDir, pidFile);
+  await first.started;
+  const c1 = first.client;
   const hello = c1.getHelloData()!;
   const recorded = fs.readFileSync(pidFile, "utf-8").trim();
   assert.equal(Number(recorded), hello.pid, "pid file must hold the HELLO pid");
@@ -62,17 +73,27 @@ test("t_5d29bcab smoke: pid file records hello pid; duplicate is locked out", as
   let second: SidecarClient | null = null;
   let secondOutcome: string = "";
   try {
-    second = await startClient(dataDir, pidFile2);
+    const s = await startClient(dataDir, pidFile2);
+    second = s.client;
+    await s.started;
     secondOutcome = "started";
   } catch (e) {
     secondOutcome = (e as Error).message;
   } finally {
     // The failing client keeps a restart loop alive (max 3) — stop it so
-    // this test process can exit.
+    // this test process can exit. `second` must reference the client even
+    // when start() rejected: without the reference, the orphaned restart
+    // loop respawns a sidecar AFTER c1.stop() released the python lock,
+    // and that process (with open stdio pipes) hangs node --test forever.
     try { await second?.stop(); } catch { /* already dead */ }
   }
   assert.notEqual(secondOutcome, "started", "second sidecar must NOT become ready");
 
   await c1.stop();
   assert.ok(!fs.existsSync(pidFile), "pid file removed after clean stop");
+  } finally {
+    // Remove the temp tree even on failure — leftover dirs (with a stale
+    // pid file) accumulate in /tmp across runs.
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
 });

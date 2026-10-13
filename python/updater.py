@@ -41,7 +41,11 @@ MIN_BYTES = 1
 #: 包内出现这些路径前缀/文件名 → 拒绝安装（数据不变性硬规则，设计 §3.4）
 PATH_BLACKLIST_EXACT = {"config.json", "config.mcp.json", "config.example.json",
                         ".env", "sessions.db"}
-PATH_BLACKLIST_PREFIX = ("data/", "skills/", "logs/", "updates/", "node_modules/")
+# v25 (t_27714fcb): "userdata/" added -- the Chromium profile dir the
+# launcher creates via --user-data-dir=<InstallDir>\userdata belongs
+# to the user exactly like data/ does.
+PATH_BLACKLIST_PREFIX = ("data/", "skills/", "logs/", "updates/", "node_modules/",
+                        "userdata/")
 
 _UPDATES_DIRNAME = "updates"
 _STAGED_DIRNAME = "staged-{version}"
@@ -53,6 +57,18 @@ _RENAME_RETRY_DELAY = 0.5
 # 旧树统计排除这些目录（node_modules 从不进包、data/logs 是用户/运行产物），
 # 只比较「程序本体」，避免正常升级被误杀。
 _STAGED_EXCLUDE_DIRS = {"node_modules", ".git", "logs", "updates", "data", "skills"}
+
+# v25 (t_27714fcb): directories under the INSTALL ROOT that belong to
+# the user (live data, never shipped in a package -- the blacklist
+# already enforces the "never in a package" half). When an update
+# swaps the whole install tree, these are CARRIED OVER from the old
+# tree into the new one after the atomic rename, before any delete.
+# Sidecar data dir: <InstallDir>\data (logs/sessions.db/audit.db/
+# memory/runs/attachments). Chromium profile: <InstallDir>\userdata
+# (launcher writes --user-data-dir=%~dp0userdata). Both only when they
+# sit INSIDE the repo root -- a DESK_AGENT_DATA_DIR / -DataDir pointing
+# outside the tree was never in the swap path to begin with.
+_USER_TREE_DIRS = ("data", "userdata")
 _STAGED_MIN_RATIO = 0.25     # staged 文件数/体积低于旧树 1/4 → 结构可疑，拒绝
 
 
@@ -460,6 +476,14 @@ def apply_local(path: str) -> dict[str, Any]:
         _rename_with_retry(staged_root, root)
         # 目标位置可能残留同级 staged_root 的父壳（staged-<v>/ 内层）
         _cleanup_staged_shell(staged, staged_root)
+        # v25 (t_27714fcb): CARRY the user-owned dirs out of the old
+        # tree (now at `backup`) back into the new install root. The
+        # swap above moved the WHOLE old tree -- including the user's
+        # live data/ and userdata/ -- into backup; without this pass
+        # the user's sessions.db would only exist in the .bak-<ts>
+        # copy. Move is atomic-ish per dir; on any failure we roll
+        # the whole update back (the generic except below).
+        _carry_user_tree_dirs(backup, root)
     except Exception as e:                       # noqa: BLE001 - 回滚兜底
         _log("error", f"apply failed, rolling back: {e}")
         _rollback(root, backup, staged)
@@ -495,10 +519,55 @@ def apply_local(path: str) -> dict[str, Any]:
     }
 
 
+def _carry_user_tree_dirs(backup: str, root: str) -> list[str]:
+    """v25 (t_27714fcb): move user-owned dirs from the just-swapped-out
+    old tree (``backup``) back into the new install root (``root``).
+
+    The atomic swap moved the ENTIRE old tree into ``backup`` -- the
+    user's live data/ and userdata/ went with it. The package never
+    contains those paths (PATH_BLACKLIST enforces it), so the new tree
+    has no competing copies; a leftover (hand-made) copy in the package
+    would have failed _blacklist_check long before the swap.
+
+    Any failure RAISES (caller rolls the whole update back) -- a
+    user dir that cannot be carried over must fail the update, not
+    silently drop the user's sessions. Returns the carried dir names.
+    """
+    carried = []
+    for name in _USER_TREE_DIRS:
+        src = os.path.join(backup, name)
+        dst = os.path.join(root, name)
+        if not os.path.exists(src):
+            continue
+        if os.path.exists(dst):
+            # Defensive: never overwrite. Log and leave it in the
+            # backup (the user can still reach it there).
+            _log("warn", f"carry-over skipped, destination exists: {dst} "
+                         f"(old copy preserved in {backup})")
+            continue
+        _rename_with_retry(src, dst)
+        carried.append(name)
+        _log("info", f"carried user dir into new tree: {dst}")
+    return carried
+
+
 def _rollback(root: str, backup: str, staged: str) -> None:
     try:
         if os.path.exists(backup):
             if os.path.exists(root):
+                # v25 (t_27714fcb): move any carried-over user dirs BACK
+                # into the backup tree first, so the restore below
+                # returns the user's data together with the old version.
+                for name in _USER_TREE_DIRS:
+                    carried = os.path.join(root, name)
+                    back = os.path.join(backup, name)
+                    if os.path.exists(carried) and not os.path.exists(back):
+                        try:
+                            _rename_with_retry(carried, back)
+                        except UpdaterError:            # pragma: no cover
+                            _log("error", "rollback could not restore "
+                                           f"user dir {carried}; it is "
+                                           f"still intact in the new tree")
                 shutil.rmtree(root, ignore_errors=True)
             try:
                 _rename_with_retry(backup, root)
