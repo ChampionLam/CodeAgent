@@ -39,6 +39,7 @@ On startup, sends an unsolicited `evt hello` frame (R3 verification).
 """
 from __future__ import annotations
 
+import net_kit
 import json
 import os
 import re
@@ -2288,8 +2289,62 @@ def _skills_list_payload() -> dict:
     return {"skills": skills, "skipped": skipped}
 
 
-def handle_request(req: dict) -> dict:
-    """Dispatch a single request frame; return the response frame."""
+#: 会打网络、可能好几秒的 RPC —— 必须在工作线程里跑。
+#:
+#: 侧车主循环是同步内联执行 handler 的。网络型 handler 一旦堵住主循环，就回
+#: 不了前端的 ping；前端收不到 pong 会判定"侧车已死"，杀进程重启，三次用尽
+#: 变 crashed —— 于是"网络慢"升级成"程序崩溃"（真机实测：IPv6 黑洞网络里
+#: 取模型列表卡到超时，随后所有模型接口都报 sidecar not ready: crashed）。
+#: 慢请求本身不是错误，不该被当成死亡信号。见 net_kit 模块头。
+_THREADED_METHODS = frozenset({
+    "models.fetch",      # GET /models（用户点"获取模型列表"）
+})
+# TODO(下一步): update.check / update.download 也是打网络的，理应同样派发；
+# 它们的 RPC 现在被 python/tests/test_updater.py 的 _rpc() 助手当作"同步返回
+# 帧"断言，要先把那个助手改成"等结果帧"再挪过来。别在这里直接加，会打破
+# 现成的契约测试。
+
+
+def _dispatch_threaded(req: dict, req_id: str, method: str) -> None:
+    """把慢 RPC 交给工作线程，主循环立刻继续（调用方收到 None = 本次不写帧）。
+
+    结果帧由工作线程写、且只写这一帧，id 与请求一致 —— 对前端契约零变化
+    （一个 id 依旧只收到一帧响应）。
+    """
+    log("INFO", "rpc %s start (id=%s) -- dispatched to worker thread"
+        % (method, req_id))
+
+    def _run() -> None:
+        started = time.monotonic()
+        try:
+            resp = handle_request(req, _dispatch=False)
+            outcome = "ok" if resp.get("ok") else "error"
+        except Exception as exc:                       # noqa: BLE001
+            outcome = "exception"
+            log("ERROR", "rpc %s raised: %s" % (method, exc))
+            resp = _make_error_response(req_id, "INTERNAL", str(exc))
+        elapsed = time.monotonic() - started
+        if elapsed >= net_kit.SLOW_RPC_LOG_SECONDS:
+            log("WARN", "rpc %s SLOW %.1fs (id=%s, %s)"
+                % (method, elapsed, req_id, outcome))
+        else:
+            log("INFO", "rpc %s done in %.1fs (id=%s, %s)"
+                % (method, elapsed, req_id, outcome))
+        try:
+            write_frame(resp)
+        except Exception as exc:                       # noqa: BLE001
+            log("ERROR", "rpc %s: write_frame failed: %s" % (method, exc))
+
+    threading.Thread(target=_run, name="rpc-%s" % method, daemon=True).start()
+
+
+def handle_request(req: dict, _dispatch: bool = True):
+    """Dispatch a single request frame.
+
+    返回响应帧；若该请求属于 `_THREADED_METHODS`（慢网络调用）则返回
+    ``None`` —— 表示"结果帧由工作线程写"，主循环本次不写。
+    ``_dispatch=False`` 供工作线程内部复用（避免再次派发）。
+    """
     req_id = req.get("id")
     if req_id is None:
         # Shouldn't happen if framing is right, but be strict.
@@ -2301,6 +2356,9 @@ def handle_request(req: dict) -> dict:
 
     try:
         _check_protocol_version(params)
+        if _dispatch and method in _THREADED_METHODS:
+            _dispatch_threaded(req, req_id, method)
+            return None
     except FrameError as e:
         return _make_error_response(req_id, e.code, e.message)
 
@@ -2693,10 +2751,14 @@ def main() -> int:
                 log("WARN", f"ignoring non-request frame type={req.get('type')}")
                 continue
             try:
-                write_frame(handle_request(req))
+                response = handle_request(req)
             except Exception as e:
                 log("ERROR", f"handler error: {e}")
                 continue
+            if response is None:
+                # 慢 RPC 已交给工作线程，结果帧由它写（同一 id，只写一帧）。
+                continue
+            write_frame(response)
     finally:
         # MCP（P0-4）：进程退出前对 stdio server 发 shutdown 通知再 kill，
         # 不留孤儿子进程。失败只记日志（退出路径不再抛）。

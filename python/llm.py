@@ -10,6 +10,7 @@ MiniMax 的坑（已实测）：响应体外层多一个 base_resp，HTTP 200 �
 """
 from __future__ import annotations
 
+import net_kit
 import json
 import os
 import sys
@@ -615,9 +616,21 @@ def _iter_sse_json(resp):
             yield body
 
 
+_DEFAULT_OPENER = None
+
+
 def _default_opener(req, timeout: float):
-    """默认走 urllib（MiniMax 上 curl 会随机 HTTP 000，不用 curl）。"""
-    return urllib.request.urlopen(req, timeout=timeout)
+    """默认走 IPv4 优先的 opener。
+
+    MiniMax 上 curl 会随机 HTTP 000，所以不用 curl；但标准库 urlopen 是
+    按 getaddrinfo 顺序串行试地址的，双栈黑洞网络（IPv6 包被静默丢弃）会
+    把它一直拖到超时 —— 这正是"程序卡死、别的工具却通"的根因。
+    换 net_kit 的实现，Host / SNI / 证书校验口径不变。
+    """
+    global _DEFAULT_OPENER
+    if _DEFAULT_OPENER is None:
+        _DEFAULT_OPENER = net_kit.build_ipv4_first_opener()
+    return _DEFAULT_OPENER(req, timeout)
 
 
 def stream_chat(

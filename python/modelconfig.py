@@ -20,6 +20,7 @@ comments near ASCII trip a local safety guard).
 """
 from __future__ import annotations
 
+import net_kit
 import json
 import os
 import urllib.error
@@ -208,7 +209,8 @@ MODELS_RESPONSE_CAP = 1 << 20  # 1 MiB
 
 
 def _fetch_models_payload(base_url: str, api_key: str = "",
-                          timeout: int = 20, opener=None) -> Any:
+                          timeout: float = net_kit.HTTP_TIMEOUT_SECONDS,
+                          opener=None) -> Any:
     """Ask an OpenAI-compatible endpoint for its catalogue; return the parsed body.
 
     Shared by fetch_remote_models (ids) and fetch_remote_models_detailed (ids +
@@ -225,7 +227,9 @@ def _fetch_models_payload(base_url: str, api_key: str = "",
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
     req = urllib.request.Request(url, headers=headers, method="GET")
-    opener = opener or (lambda r, timeout: urllib.request.urlopen(r, timeout=timeout))
+    # IPv4 优先（net_kit）：双栈黑洞网络里标准库 urlopen 会把请求拖到超时。
+    # 超时口径见 net_kit 模块头 —— 逐地址连接上限与总超时都是命名常量。
+    opener = opener or net_kit.build_ipv4_first_opener()
     try:
         with opener(req, timeout) as resp:
             raw = resp.read(MODELS_RESPONSE_CAP + 1)
@@ -325,7 +329,8 @@ def _meta_from_payload(payload) -> dict[str, dict[str, int]]:
 
 
 def fetch_remote_models(base_url: str, api_key: str = "",
-                        timeout: int = 20, opener=None) -> list[str]:
+                        timeout: float = net_kit.HTTP_TIMEOUT_SECONDS,
+                        opener=None) -> list[str]:
     """Ask an OpenAI-compatible endpoint which models it serves.
 
     The user should not have to type a model name from memory: pick a vendor,
@@ -339,7 +344,8 @@ def fetch_remote_models(base_url: str, api_key: str = "",
 
 
 def fetch_remote_models_detailed(base_url: str, api_key: str = "",
-                                 timeout: int = 20, opener=None,
+                                 timeout: float = net_kit.HTTP_TIMEOUT_SECONDS,
+                                 opener=None,
                                  ) -> tuple[list[str], dict[str, dict[str, int]]]:
     """One request, both answers: the id list plus each model's own numbers.
 
