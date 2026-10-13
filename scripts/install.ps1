@@ -361,7 +361,7 @@
 #        explicitly. The skip reason and the Phase 0 report both
 #        mention the switch and -PythonPath.
 #   - v12 (task t_8ac08178, 2026-10-10). FIELD REGRESSION on the
-#     .111 bare box (real Windows PowerShell 5.1): v11's
+#     a bare Windows box (real Windows PowerShell 5.1): v11's
 #     registration evaluation aborted with "LiteralPath parameter
 #     cannot bind" -- provider-qualified registry paths
 #     ($tag.PSPath / $dep.PSPath, i.e. "Registry::HKEY_...")
@@ -379,7 +379,7 @@
 #     The field regression above is the ONLY behavior change;
 #     all v11 baselines are preserved (66/66 self-checks pass).
 #   - v13 (task t_9e01100c, 2026-10-10). SECOND FIELD REGRESSION on
-#     the .111 bare box (PS 5.1): -Uninstall aborted with
+#     a bare Windows box (PS 5.1): -Uninstall aborted with
 #     "LiteralPath parameter cannot bind ... empty string" from
 #     inside the registration-evaluation try/catch. Root cause
 #     (field-reproduced locally): Windows PowerShell 5.1 THROWS on
@@ -412,10 +412,10 @@
 #        the INCOMPLETE manual-cleanup recipe, the /repair-then-
 #        re-strip of <InstallDir>, and all v12 baselines preserved.
 # v14 (task t_5c458d9d): the v13 OWNERSHIP DIRECTION was right but
-#     the comparison was wrong -- captured verbatim from the .111
-#     registry after an install into D:\ca-t1:
+#     the comparison was wrong -- captured verbatim from the the field box
+#     registry after an install into D:\t:
 #       HKCU\Software\Python\PythonCore\3.12\InstallPath
-#         (default)      = "D:\ca-t1\runtime\python\"   <- TRAILING
+#         (default)      = "D:\t\runtime\python\"   <- TRAILING
 #                                                         BACKSLASH
 #         InstallPath    = ""                            <- EMPTY
 #     The official installer writes the path as the (default) value
@@ -439,10 +439,10 @@
 #        ownership.
 #     c) Uninstall cleanup flow, residue gate (three surfaces must
 #        be 0, else exit 1), and all v12/v13 gates preserved.
-#        NOT field-tested yet on the .111 real machine (Linux
+#        NOT field-tested yet on a real Windows box (Linux
 #        self-check harness only).
 #   - v20 (task t_ed26cc98, 2026-10-13). THIRD FIELD REGRESSION on the
-#     .111 bare box (fresh dir D:\ca-gui-test, install.ps1 v19):
+#     a bare Windows box (fresh dir D:\t\CodeAgent, install.ps1 v19):
 #     a) CRASH (seconds-in, uncaught): Get-RegistrySubKeys returns
 #        `,$out` with $out=@() -- a ONE-ELEMENT ARRAY containing an
 #        EMPTY ARRAY. foreach then iterates that empty-array ELEMENT
@@ -460,7 +460,7 @@
 #     b) DEAD-END (install stops): "REGISTERED but broken" hard-threw
 #        with a repair recipe that does NOT work on the real box
 #        (/repair /quiet TargetDir=... -> 1602; /uninstall /quiet ->
-#        1603 -- field log D:\ca-gui-test.log 01:50-02:10). Fix: the
+#        1603 -- field log D:\t\CodeAgent.log 01:50-02:10). Fix: the
 #        broken registration is no longer terminal. When -UsePbs is
 #        given, we now FALL THROUGH to the portable PBS route (no
 #        registration read or written); otherwise the installer
@@ -485,6 +485,36 @@
 #        patch segment is optional ((?:\.\d+)?\+), and the fallback
 #        message is now LOUD and explicit (states the registry
 #        consequence, tells the user how to stop).
+#   - v21 (task t_69654390, 2026-10-13). FOURTH FIELD REGRESSION on
+#     the field box (2026-10-13 09:10, install.ps1 v20-era): TWO gaps.
+#     a) LEAK HOLE in the blank-config assertion: the copy excluded
+#        .env / config.json but NOT their dev-era backups -- a real
+#        config.json.bak-20261009-173158 (2894 B, apiKey/DASHSCOPE
+#        field names) rode along to a fresh install while
+#        Assert-BlankConfig only checked .env and config.json. Fixes:
+#        /XF list extended to backup/credential PATTERNS (*.bak*,
+#        *.old, *.orig, *.backup, .env.*, config.json.*, *.key,
+#        *.pem, *credentials*, *secret*), AND the assertion is now a
+#        CONTENT sweep of the WHOLE install tree (Assert-BlankConfig):
+#        every text-looking file (binary = NUL in first 8 KB is
+#        skipped; >10 MB skipped) is scanned for literal sk- key
+#        material and every *.json is parsed with non-empty
+#        api-key/token/secret/credential/password fields -> hard
+#        throw "credentials leaked from source tree".
+#     b) DEV JUNK in the install dir: .pytest_cache/, backup-deploy-*,
+#        backup-flow-*, backup-ui-*, docs/, tests/, .github/,
+#        tsconfig.test.json landed in D:\...\CodeAgent. Fixes: /XD
+#        name-based exclusions (tests, test, __pycache__,
+#        .pytest_cache, cache dirs, backup-*, backups) +
+#        root-specific docs/ .github/; tsconfig.test.json in /XF;
+#        the sanity-check exclude list mirrors the copy set; the
+#        completion report now PRINTS the actual top-level layout and
+#        warns if any dev residue is still present.
+#     v21 is smoke-tested on pwsh 7 (Linux) via v21-selfcheck.ps1
+#     (structure gates + behavior tests of the credential sweep and
+#     exclusion list); real Windows robocopy /XD /XF semantics are
+#     documented robocopy behavior, parser-verified. NOT
+#     field-tested on a real Windows box yet.
 param(
     [string]$InstallDir = "",
     # v7: unified package/archive directory. Defaults to
@@ -561,7 +591,7 @@ param(
     # v17: non-interactive mode. Every interactive prompt (directory
     # choice, not-empty confirm, pre-install "continue anyway") is
     # auto-answered with its default instead of hanging on Read-Host
-    # (a real hazard when stdin is closed/NUL on .111 runs).
+    # (a real hazard when stdin is closed/NUL on real-machine runs).
     [switch]$Yes,
     # v20: treat the pinned-version REGISTRATION STATE as absent:
     # no "registered but broken" gate, no reuse, no conflict -- the
@@ -1434,7 +1464,7 @@ function Get-PythonInstallerExe([string]$DlDir) {
 # v14: read a PythonCore <tag>\InstallPath value ONCE, from ONE
 # place. The official installer writes the path as the (default)
 # value with a TRAILING BACKSLASH and leaves the NAMED InstallPath
-# value EMPTY (field fact from .111: (default) = "D:\...\python\",
+# value EMPTY (field fact from a real machine: (default) = "D:\...\python\",
 # InstallPath = ""). v13's per-sweep "(default) then named" reads
 # plus raw string compares were spread over three functions; now
 # every sweep calls this. $TagPath = full tag key path; returns the
@@ -1472,7 +1502,7 @@ function Convert-PathForCompare([string]$P) {
 # sides go through Convert-PathForCompare (trim + trailing-separator
 # strip + separator unification + GetFullPath on Windows), then a
 # case-insensitive "prefix + separator" test (equal counts as
-# inside). The .111 field case -- (default) value with a trailing
+# inside). The the field box field case -- (default) value with a trailing
 # backslash -- now matches. $P may be $null/"" -> $false.
 function Test-PathUnder([string]$P, [string]$Root) {
     if (-not $P -or -not $Root) { return $false }
@@ -1538,10 +1568,76 @@ function Resolve-DataDir([string]$ExplicitDataDir, [string]$InstallDirForRecord)
     return @{ DataDir = (Join-Path $env:APPDATA $Script:AppDirName); Source = "default" }
 }
 
+# v22 (t_a8ceb810, the "-PurgeData forged-stamp" risk): write the
+# marker ONLY when THIS install genuinely owns the data dir, i.e. the
+# dir did not pre-exist with a DIFFERENT install's stamp in it, and
+# one of:
+#   (a) -DataDir was explicitly given (user declared it), or
+#   (b) the data dir lives INSIDE the InstallDir, or
+#   (c) the dir already carries a stamp naming THIS InstallDir
+#       (a prior install from the same place -- same owner).
+# Otherwise (e.g. install to D:\ elsewhere while data resolves to the
+# Electron default %APPDATA%\CodeAgent) the dir is read-only for us:
+# stamp NOTHING -- a stale/absent marker means purge later REFUSES,
+# which is the safe direction. If the dir exists and carries a stamp
+# for a DIFFERENT install dir, keep it, claim nothing, warn loudly.
+function Write-DataOwnershipMarkerIfOwned([string]$DataDir, [string]$InstallDir) {
+    if (-not $DataDir -or -not $InstallDir) { return }
+    if (-not (Test-PathSafe $DataDir)) {
+        # Dir does not exist yet: Electron will create it later, and it
+        # will NOT be under this install's control unless -DataDir said
+        # so or it is inside the InstallDir. Marking a not-yet-existing
+        # default dir would exactly reproduce the reported incident
+        # (a stamp lands in %APPDATA%\CodeAgent for an install whose
+        # -InstallDir is elsewhere) -- so only pre-declare ownership
+        # when this install owns it by construction.
+        $owns = $false
+        if ($Script:DataDirExplicit) { $owns = $true }
+        elseif ((Test-PathUnder -P $DataDir -Root $InstallDir)) { $owns = $true }
+        if ($owns) {
+            Write-DataOwnershipMarker $DataDir $InstallDir
+        } else {
+            Write-Host "[install] data dir '$DataDir' does not exist yet and is not owned by this install -- no ownership marker pre-declared (a later -PurgeData will refuse to touch it unless it can prove ownership)"
+        }
+        return
+    }
+    # Dir exists: inspect any stamp already inside it.
+    $markerPath = Join-Path $DataDir $Script:DataOwnershipFile
+    $existingInstall = $null
+    if (Test-PathSafe $markerPath) {
+        try {
+            $m = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            $existingInstall = [string]$m.installDir
+        } catch {
+            Write-Warning "[install] data dir $DataDir contains an unreadable ownership marker -- treating it as NOT ours, refusing to overwrite"
+            return
+        }
+    }
+    if ($existingInstall -and $existingInstall.Trim() -and
+        ((Convert-PathForCompare $existingInstall) -ne (Convert-PathForCompare $InstallDir))) {
+        # 3) someone else's stamp: do not overwrite, do not claim, warn
+        Write-Warning ("[install] data dir '{0}' is already marked as belonging to a DIFFERENT install '{1}' -- marker left untouched; this install did NOT claim the directory (a later -PurgeData from THIS install will refuse it)" -f $DataDir, $existingInstall)
+        return
+    }
+    # No stamp, or a stamp that already names this install dir.
+    # Claim it only when this install genuinely owns it (explicit
+    # -DataDir, inside the InstallDir, or a matching prior stamp).
+    $owns = $false
+    if ($Script:DataDirExplicit) { $owns = $true }
+    elseif ((Test-PathUnder -P $DataDir -Root $InstallDir)) { $owns = $true }
+    elseif ($existingInstall -and $existingInstall.Trim()) { $owns = $true }
+    if ($owns) {
+        Write-DataOwnershipMarker $DataDir $InstallDir
+    } else {
+        Write-Host "[install] data dir '$DataDir' exists but is NOT owned by this install (no -DataDir, not inside '$InstallDir', no matching prior marker) -- left read-only for the installer: no ownership marker written"
+    }
+}
+
 # Write the ownership marker into the data dir (best effort -- a
 # read-only or not-yet-created data dir must never fail an install:
 # purge then simply demands an explicit -DataDir later, which is the
-# safe direction).
+# safe direction). Called ONLY from Write-DataOwnershipMarkerIfOwned
+# after ownership has been proven -- never call directly.
 function Write-DataOwnershipMarker([string]$DataDir, [string]$InstallDir) {
     if (-not $DataDir -or -not $InstallDir) { return }
     if (-not (Test-PathSafe $DataDir)) { return }   # created by Electron later; no marker possible
@@ -1554,15 +1650,20 @@ function Write-DataOwnershipMarker([string]$DataDir, [string]$InstallDir) {
 }
 
 # PROOF gate. $Candidate is the dir -PurgeData is about to delete.
-# Returns $true ONLY when we can prove it belongs to THIS install:
-#   a) the ownership marker inside it names this InstallDir; or
-#   b) the candidate equals the dataDir recorded in this install's
-#      .install-state.json; or
-#   c) the candidate is the Electron default AND the install record
-#      says the install itself used the default (recording "" never
-#      happens; default installs record the default path).
-# A candidate supplied as explicit -DataDir that we cannot prove is
-# REFUSED (task requirement 2: cannot prove -> do not purge).
+# v22 (t_a8ceb810): the ONLY sufficient proof is the ownership marker
+# INSIDE the candidate naming this InstallDir (a). The old rules
+#   b) candidate == dataDir recorded in .install-state.json
+#   c) candidate is the Electron default AND the record says default
+# are DEMOTED to necessary conditions -- they may no longer authorize
+# a purge on their own, because the install-time record says "this
+# install USED that dir", not "we own the WHOLE dir and everything
+# the user put in it". Concretely: installing with -InstallDir D:\...
+# used to (unconditionally) stamp the default %APPDATA%\CodeAgent,
+# so an uninstall -PurgeData could prove ownership of the USER'S REAL
+# DATA DIR via that forged stamp -- the exact mis-delete setup this
+# task is about. Since v22 the install side only stamps dirs it
+# genuinely owns; a dir with no marker (or a marker naming another
+# install) is refused, whatever the record says.
 function Test-DataDirBelongsToInstall([string]$Candidate, [string]$InstallDir, [string]$RecordedDataDir) {
     if (-not $Candidate) { return $false }
     $c = Convert-PathForCompare $Candidate
@@ -1577,13 +1678,18 @@ function Test-DataDirBelongsToInstall([string]$Candidate, [string]$InstallDir, [
                 return $true
             }
         } catch { }
+        # a) marker exists but is unreadable or names another install:
+        # explicitly NOT ours -- do not fall through to the record.
+        return $false
     }
-    # b) matches the install-time record
+    # no marker inside: if the dir exists, we cannot prove we own the
+    # user data in it -> refuse. (v22: record/default match alone is
+    # no longer proof.)
+    if (Test-PathSafe $Candidate) { return $false }
+    # dir does not exist: nothing to delete; caller treats absent dirs
+    # separately, but a recorded match at least confirms we are pointed
+    # at the right (nonexistent) target.
     if ($RecordedDataDir -and ((Convert-PathForCompare $RecordedDataDir) -eq $c)) { return $true }
-    # c) both sides resolved to the Electron default for the SAME install
-    $defaultDir = Convert-PathForCompare (Join-Path $env:APPDATA $Script:AppDirName)
-    if (($c -eq $defaultDir) -and $RecordedDataDir -and
-        ((Convert-PathForCompare $RecordedDataDir) -eq $defaultDir)) { return $true }
     return $false
 }
 
@@ -1615,7 +1721,7 @@ function Invoke-PurgeData([string]$ExplicitDataDir, [string]$InstallDir, [bool]$
         # unproven: refuse unless the user passed -DataDir explicitly
         # AND confirmed via -Force... NO: the task is explicit --
         # cannot prove -> refuse, period. Explicit -DataDir alone is
-        # NOT proof (that is how the .111 incident deleted the wrong
+        # NOT proof (that is how the earlier data-directory incident deleted the wrong
         # dir). The install marker is the only proof.
         Write-Warning @"
 [uninstall] REFUSED to purge data dir: $target
@@ -1662,7 +1768,7 @@ function Get-RegistryKeyValues([string]$KeyPath) {
 # then iterated that empty-array ELEMENT (not zero elements) and
 # Split-Path -Leaf crashed with
 # ParameterArgumentValidationErrorEmptyArrayNotAllowed (field:
-# .111 empty HKCU PythonCore root, seconds into install; repro on
+# the field box empty HKCU PythonCore root, seconds into install; repro on
 # pwsh 7.4.6). The comma-trick was added in v13 for the one-element
 # unwrapping bug; applied to an EMPTY array it poisons every caller.
 # New contract: only real, non-blank STRING paths are appended
@@ -1687,7 +1793,7 @@ function Get-RegistrySubKeys([string]$RootPath) {
 
 # v13: Is the pinned-version registration OURS? The official
 # per-user installer NEVER writes an ARP InstallLocation (field
-# fact from .111), so ownership is decided ONLY by a PythonCore
+# fact from a real machine), so ownership is decided ONLY by a PythonCore
 # <tag>\InstallPath pointing INSIDE <InstallDir>. When ours, the
 # official installer chain removes PythonCore + ARP + WiX
 # Dependencies together. When not ours (someone else's same
@@ -2080,7 +2186,112 @@ function Assert-BlankConfig([string]$InstallDir, [bool]$EnvExistedBefore, [bool]
             }
         }
     }
+    # --- v21: credential sweep, ALL other files (not just .env /
+    #     config.json) --- see Invoke-CredentialSweep for the rationale.
+    Invoke-CredentialSweep -Root $InstallDir -SkipFiles @()
     Write-Host "[install] blank-config assertion OK: no credentials copied from the source tree"
+}
+
+# v21 (t_69654390): content-based credential sweep of a whole tree.
+# The v9 assert only checked .env and config.json; the real field
+# finding (config.json.bak-20261009-173158, 2894 B) sailed past both
+# the /XF list and the assert. This sweep scans EVERY regular file:
+#   (a) literal sk- key material: sk- followed by 8+ key chars, with a
+#       non-alphanumeric BEFORE the "sk" (word boundary) so ordinary
+#       words like "task-management" or "risk-assessment" do not match;
+#   (b) any *.json with a NON-EMPTY api-key/token/secret/credential/
+#       password field (apiKeyEnv holds a variable NAME, not a value,
+#       and is exempt).
+# Binary-looking files (NUL in first 8 KB, no UTF-16 BOM) and files
+# >10 MB are skipped: keys do not live in electron/node_modules
+# payloads, and false positives would hard-fail every install.
+# $SkipFiles: absolute paths to leave alone (user-owned .env /
+# config.json on the FINAL sweep -- a user's own filled-in config is
+# not a leak). UTF-16LE (FF FE BOM) is decoded via the Unicode branch.
+function Invoke-CredentialSweep([string]$Root, [string[]]$SkipFiles) {
+    $skPattern = '(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}'
+    $liveFieldRe = '(?i)^(api_?key(?!env)|.*_?token|.*_?secret|.*_?credential|.*_?password)$'
+    $script:credFindings = @()
+    $sweepStack = New-Object System.Collections.Stack
+    $sweepStack.Push((Get-Item -LiteralPath $Root -Force))
+    while ($sweepStack.Count -gt 0) {
+        $dir = $sweepStack.Pop()
+        foreach ($child in (Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)) {
+            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            if ($child.PSIsContainer) { $sweepStack.Push($child); continue }
+            if ($child.Length -eq 0) { continue }
+            if ($child.Length -gt 10MB) { continue }  # payloads; keys never live here
+            if ($SkipFiles -and ($SkipFiles -contains $child.FullName)) { continue }
+            $raw = $null
+            try { $raw = [IO.File]::ReadAllBytes($child.FullName) } catch { continue }
+            # UTF16LE BOM check FIRST: a FF FE text file contains
+            # interleaved NULs and the binary heuristic below would
+            # wrongly skip it.
+            $hasUtf16Bom = ($raw.Length -ge 2 -and $raw[0] -eq 0xFF -and $raw[1] -eq 0xFE)
+            if (-not $hasUtf16Bom) {
+                # binary heuristic: NUL in first 8 KB -> skip
+                $probeLen = [Math]::Min(8192, $raw.Length)
+                $isBinary = $false
+                for ($i = 0; $i -lt $probeLen; $i++) { if ($raw[$i] -eq 0) { $isBinary = $true; break } }
+                if ($isBinary) { continue }
+                $text = [Text.Encoding]::UTF8.GetString($raw)
+            } else {
+                $text = [Text.Encoding]::Unicode.GetString($raw)
+            }
+            # (a) literal sk- key material
+            $m = [regex]::Match($text, $skPattern)
+            if ($m.Success) {
+                $script:credFindings += ("{0}: literal key material `"{1}...`" ({2} bytes)" -f $child.FullName, $m.Value.Substring(0, [Math]::Min(6, $m.Value.Length)), $child.Length)
+                continue
+            }
+            # (b) non-empty api-key-ish JSON field -- but NEVER on
+            # dependency manifests: package.json / package-lock.json
+            # contain non-secret "tokens"/"token" fields (e.g.
+            # typescript's "@esfx/canceltoken" deps) that would
+            # hard-fail every install. Config-ish files only.
+            $isManifest = $child.Name -match '(?i)^(package|package-lock|npm-shrinkwrap)\.json$'
+            if ($child.Extension -eq ".json" -and -not $isManifest) {
+                try {
+                    $obj = $text | ConvertFrom-Json -ErrorAction Stop
+                    $script:badLeaves = @()
+                    $walkCfg = {
+                        param($node)
+                        if ($null -eq $node) { return }
+                        if ($node -is [string]) { return }
+                        if ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
+                            foreach ($item in $node) { & $walkCfg $item }
+                            return
+                        }
+                        foreach ($p in $node.PSObject.Properties) {
+                            if ($p.Value -is [string] -and $p.Name -match $liveFieldRe -and ([string]$p.Value).Trim() -ne "") {
+                                $script:badLeaves += $p.Name
+                            } elseif (-not ($p.Value -is [string])) {
+                                & $walkCfg $p.Value
+                            }
+                        }
+                    }
+                    & $walkCfg $obj
+                    if ($script:badLeaves.Count -gt 0) {
+                        $script:credFindings += ("{0}: live field(s) {1} ({2} bytes)" -f $child.FullName, (($script:badLeaves | Select-Object -First 3) -join ","), $child.Length)
+                    }
+                } catch { }  # not JSON -> name-based /XF already governed it
+            }
+        }
+    }
+    if ($script:credFindings.Count -gt 0) {
+        $list = ($script:credFindings | Select-Object -First 8) -join [Environment]::NewLine + "  "
+        throw @"
+
+[install] SECURITY FAILURE: credentials leaked from source tree.
+  The install tree contains live credential material:
+  $list
+  The source tree must NEVER ship .env / config.json / *.bak / backup
+  copies of them (see the v21 copy /XF list and this content sweep).
+  The install has STOPPED. Delete $InstallDir, clean the source tree
+  of dev backups, and re-run.
+"@
+    }
+    Write-Host "[install] credential sweep OK: no sk- key material and no valued apiKey field anywhere under $Root"
 }
 
 
@@ -2576,7 +2787,7 @@ function Invoke-EnvironmentCheck([string]$CheckInstallDir) {
     # v10: broken / conflicting same-version registration is a FIX
     # FIRST item, not a silent skip.
     if ($out.RegAction -eq "broken") {
-        # v20: the old /repair+/uninstall recipe FAILED on the .111
+        # v20: the old /repair+/uninstall recipe FAILED on the the field box
         # field box (1602/1603); re-point the guidance at the routes
         # that actually work.
         $userMustFix += ("BROKEN Python $PythonVersion registration (registry says installed, files missing) -- the official-installer route would SILENTLY SKIP (WixBundleInstalled). EASIEST: re-run with -UsePbs (portable, no registration) or -IgnoreRegistryState; to clean the registration for real use msiexec /x {GUID} per ARP/Dependencies entry, then delete HKCU\Software\Python\PythonCore\3.12")
@@ -2958,7 +3169,7 @@ function Install-PythonRuntime([string]$InstallDir) {
   (2) -IgnoreRegistryState -- skip the registration gate (the official installer runs anyway; if it still silently-skips, the install fails loudly at the post-install exe check -- nothing is half-installed)
   (3) -PythonArchive C:\path\to\cpython-...-install_only.tar.gz -- self-contained archive route, no registration involved
   (4) -PythonPath C:\path\to\python.exe -- reuse an existing interpreter
-  (5) clean the registration for real (the /repair+/uninstall recipe FAILED on the .111 field box with 1602/1603; the reliable route is GUID-level removal):
+  (5) clean the registration for real (the /repair+/uninstall recipe FAILED on the field box with 1602/1603; the reliable route is GUID-level removal):
       msiexec /x {GUID} /quiet  -- one per MSI component, GUIDs read from
         HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ (DisplayName like 'Python 3.12 Core Interpreter')
         and HKCU\Software\Classes\Installer\Dependencies (each child key name IS the dependency GUID)
@@ -3306,7 +3517,7 @@ if ($Uninstall) {
     # v13: default PackageDir BEFORE first use -- the param-defaulting
     # block below this `exit` only serves the install path, so on a
     # bare -Uninstall $PackageDir was "" (and Test-Path -LiteralPath ''
-    # THROWS on PS 5.1 -- the .111 crash).
+    # THROWS on PS 5.1 -- that PS 5.1 crash).
     if (-not $PackageDir) { $PackageDir = Join-Path $InstallDir "packages" }
     else { $PackageDir = Resolve-PathSafe $PackageDir }
     Write-Host "[uninstall] removing: $InstallDir"
@@ -3498,7 +3709,7 @@ FIX (pick one):
     if ($Yes) {
         # v17: non-interactive -- default-answer "y" directly (the
         # v16 code only bypassed the prompt under -Force; a -Yes run
-        # with closed stdin hung on Read-Host on the .111 box).
+        # with closed stdin hung on Read-Host on the field box).
         Write-Host "[install] -Yes: continuing despite Phase 0 warnings (non-interactive)"
     } elseif (-not $Force) {
         $answer = Read-Host "Continue installing anyway? [Y/n]"
@@ -3630,6 +3841,36 @@ if ($copyDone) {
         foreach ($s in @("node_modules", ".git", ".install-state.json", "runtime", "codeagent")) {
             $rcArgs += "/XD"; $rcArgs += (Join-Path $sourceRoot $s)
         }
+        # v21 (t_69654390): dev-era junk must never reach a user
+        # install. Field finding (field box, 2026-10-13): the install
+        # dir ended up with .pytest_cache/, backup-deploy-*/,
+        # backup-flow-*/, backup-ui-*/, docs/, tests/, .github/,
+        # tsconfig.test.json -- dev tree leftovers (disk waste,
+        # internal-structure exposure, test fixtures). /XD is name
+        # based; bare names match at any depth. docs/ is dev design
+        # notes and research artifacts -> dev-only, excluded.
+        # tsconfig.test.json is the only FILE in the set -> /XF below.
+        foreach ($xd in @(
+            ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+            ".coverage", "htmlcov", ".cache",
+            "tests", "test", "__pycache__", ".nyc_output", "coverage",
+            "backup-*", "backups"
+        )) {
+            $rcArgs += "/XD"; $rcArgs += $xd
+        }
+        foreach ($d in @("docs", ".github")) {
+            $srcD = Join-Path $sourceRoot $d
+            if (Test-Path -LiteralPath $srcD) { $rcArgs += "/XD"; $rcArgs += $srcD }
+        }
+        # v21: the scripts subtree carries its own dev harnesses
+        # (scripts\tests-v10\*, scripts\git-hooks\*) -- test fixtures
+        # embed FAKE sk- keys that the final credential sweep would
+        # correctly reject; they must not be copied at all. Excluded
+        # by full source path, not by bare name.
+        foreach ($s in @("scripts\tests-v10", "scripts\git-hooks")) {
+            $srcS = Join-Path $sourceRoot $s
+            if (Test-Path -LiteralPath $srcS) { $rcArgs += "/XD"; $rcArgs += $srcS }
+        }
         # exclude by NAME anywhere in the tree (robocopy /XD matches
         # full paths, so also add bare names which match any depth):
         $rcArgs += "/XD"; $rcArgs += ".venv"
@@ -3643,7 +3884,20 @@ if ($copyDone) {
         # 2311-byte config.json rode along to the target.) The HARD
         # backstop below (Assert-BlankConfig) catches anything that
         # still slips through.
-        foreach ($xf in @(".env", "config.json", ".install-state.json", "*.log")) {
+        # v21 (t_69654390): the v9 list had a LEAK HOLE -- it covered
+        # .env and config.json but NOT their backup siblings. Real
+        # field finding (field box, 2026-10-13): config.json.bak-*
+        # (dev-period config backups, apiKey/DASHSCOPE field names
+        # inside) rode along to a fresh install. Any name that IS a
+        # credential or backup of one is excluded by PATTERN:
+        foreach ($xf in @(
+            ".env", ".env.*", "*.env", "*.env.*",
+            "config.json", "config.json.*", "config.json.bak-*",
+            "*.bak", "*.bak-*", "*.backup", "*.old", "*.orig",
+            "*credentials*", "*secret*", "*.key", "*.pem",
+            ".install-state.json", "*.log", "tsconfig.test.json",
+            "*.pyc", "*.tsbuildinfo"
+        )) {
             $rcArgs += "/XF"; $rcArgs += $xf
         }
         robocopy @rcArgs
@@ -3652,7 +3906,14 @@ if ($copyDone) {
     }
     # v4: post-copy sanity assert. Expected size = source tree with
     # the SAME exclusions, walked WITHOUT following reparse points.
-    $copyExcludes = @("node_modules", ".git", "runtime", ".install-state.json")
+    # v21: mirror the new /XD dev-junk set so the source expectation
+    # counts the same directories robocopy skipped.
+    $copyExcludes = @(
+        "node_modules", ".git", "runtime", ".install-state.json", "codeagent",
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".coverage",
+        "htmlcov", ".cache", "tests", "test", "__pycache__",
+        ".nyc_output", "coverage", "backups", "docs", ".github", ".venv"
+    )
     $srcStats = Get-TreeStats $sourceRoot $copyExcludes
     $dstStats = Get-TreeStats $InstallDir $copyExcludes
     Assert-CopySanity $srcStats $dstStats "app tree copy"
@@ -3663,6 +3924,10 @@ if ($copyDone) {
     Assert-BlankConfig -InstallDir $InstallDir `
         -EnvExistedBefore:$envExistedBefore -CfgExistedBefore:$cfgExistedBefore `
         -ExampleJson (Join-Path $sourceRoot "config.example.json")
+    # v21: record the actual top-level layout for the completion
+    # report (acceptance: print WHICH top-level dirs were copied).
+    $Script:CopiedTopDirs = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Name }) | Sort-Object
 }
 
 # node_modules: electron itself is needed at runtime -> copy it
@@ -3787,7 +4052,7 @@ FIX (pick one):
         # deleted days later). Say so explicitly, every time.
         if (([string]$basePy) -notlike (([string]$InstallDir).TrimEnd('\') + '\*')) {
             # v18.1: wording must match actual behavior (task
-            # t_729065d5, real-machine .111 feedback):
+            # t_729065d5, real-machine the field box feedback):
             #   - -PythonArchive alone can be overridden by a
             #     registered same-version REUSE; it only wins with
             #     -Offline (v18 priority fix).
@@ -3826,7 +4091,17 @@ trusted-host = $(($IndexUrl -replace '^https?://','' -replace '/.*$',''))
         # "pip install" in this venv keeps caching locally (complement
         # of $env:PIP_CACHE_DIR, which covers only installer-time runs).
         if ($Script:CacheDir) {
-            $pipIniContent += "cache-dir = " + (Join-Path $Script:CacheDir "pip") + "`r`n"
+            # v21: PowerShell drops the line break right before the closing
+            # "@ of a here-string, so $pipIniContent ends WITHOUT a newline.
+            # The append therefore has to start with CRLF -- otherwise the
+            # file ends up with "trusted-host = <host>cache-dir = D:\...\pip"
+            # on ONE line, pip splits that value on whitespace, treats the
+            # path as a second trusted host and dies with
+            # "ValueError: Port could not be cast to integer value as
+            #  '\...\runtime\cache\pip'" -- which killed BOTH the mirror and
+            # the PyPI fallback and aborted the whole install (the field box real-machine
+            # repro 2026-10-13 02:0x / 08:0x).
+            $pipIniContent += "`r`n" + "cache-dir = " + (Join-Path $Script:CacheDir "pip") + "`r`n"
         }
         [IO.File]::WriteAllText($pipIni, $pipIniContent, (New-Object Text.UTF8Encoding($false)))
         Write-Host "[install] venv pip.ini written (index pinned to $IndexUrl$(if ($Script:CacheDir) { "; cache pinned to $(Join-Path $Script:CacheDir 'pip')" }))"
@@ -3834,6 +4109,26 @@ trusted-host = $(($IndexUrl -replace '^https?://','' -replace '/.*$',''))
         $readBack = Get-Content -LiteralPath $pipIni -Raw
         if ($readBack -notmatch [regex]::Escape($IndexUrl)) {
             throw "[install] pip.ini self-check failed: index-url not written verbatim ($pipIni)"
+        }
+        # v21: the v19 -CacheDir append glued cache-dir onto the trusted-host
+        # line (see above). Assert BOTH keys are on their own line, so a
+        # regression can never again ship a pip.ini that pip cannot parse.
+        $readLines = @($readBack -split "`r?`n")
+        $thLine = @($readLines | Where-Object { $_ -match '^\s*trusted-host\s*=' })
+        $cdLine = @($readLines | Where-Object { $_ -match '^\s*cache-dir\s*=' })
+        if ($thLine.Count -ne 1) {
+            throw "[install] pip.ini self-check failed: trusted-host must occupy exactly one line (got $($thLine.Count)) in $pipIni"
+        }
+        if ($thLine[0] -match '\\' -or $thLine[0] -match '\s\S+=') {
+            throw "[install] pip.ini self-check failed: trusted-host line is polluted ('$($thLine[0])') -- cache-dir must not be glued onto it ($pipIni)"
+        }
+        if ($Script:CacheDir) {
+            if ($cdLine.Count -ne 1) {
+                throw "[install] pip.ini self-check failed: -CacheDir was given but cache-dir does not occupy its own line (got $($cdLine.Count)) in $pipIni"
+            }
+            if ($cdLine[0] -notmatch [regex]::Escape($Script:CacheDir)) {
+                throw "[install] pip.ini self-check failed: cache-dir line does not point at -CacheDir ('$($cdLine[0])') in $pipIni"
+            }
         }
     }
 }
@@ -4021,18 +4316,36 @@ if (Test-Path -LiteralPath $cfgDst) {
     } catch { $cfgIsBlank = $false }
 }
 
+# v21 (t_69654390): FINAL whole-tree credential sweep, after every
+# copy (app tree, node_modules, runtime, templates) has landed. This
+# is the acceptance line: "no sk- plaintext or valued apiKey anywhere
+# under the finished install tree". A user's own filled-in .env /
+# config.json (pre-existing BEFORE the copy, or just created from the
+# blank template for them to fill) is THEIRS, not a leak -- excluded
+# via -SkipFiles. Everything else must be clean.
+$finalSkip = @()
+foreach ($p in @((Join-Path $InstallDir ".env"), $cfgDst)) {
+    if ($p -and (Test-Path -LiteralPath $p)) { $finalSkip += $p }
+}
+Invoke-CredentialSweep -Root $InstallDir -SkipFiles $finalSkip
+
 # completion marker (idempotency)
 # v17: record the RESOLVED data dir so a later -Uninstall -PurgeData
 # resolves the same target the install actually used (explicit
 # -DataDir > this record > Electron default -- one rule set, both
-# sides). Also drop an ownership marker INSIDE the data dir when it
-# already exists (Electron creates it on first launch when it does
-# not; a data dir that first appears later simply cannot be proven
-# and purge then refuses -- safe direction).
+# sides).
+# v22 (t_a8ceb810): the ownership marker is now written through the
+# ownership PROOF (Write-DataOwnershipMarkerIfOwned), never
+# unconditionally: installing to D:\ elsewhere must not stamp the
+# user's real data dir as "belonging to this install" -- that stamp
+# was exactly the -PurgeData mis-delete setup. Marker only when this
+# install owns the dir (explicit -DataDir / inside InstallDir / same
+# prior stamp); otherwise read-only + warning. The uninstall-side
+# record still notes the resolved dataDir so -PurgeData can NAME the
+# dir, but purge still requires the ownership proof above.
+$Script:DataDirExplicit = [bool]($DataDir -and $DataDir.Trim())
 $Script:ResolvedDataDir = (Resolve-DataDir $DataDir $InstallDir).DataDir
-if (Test-PathSafe $Script:ResolvedDataDir) {
-    Write-DataOwnershipMarker $Script:ResolvedDataDir $InstallDir
-}
+Write-DataOwnershipMarkerIfOwned $Script:ResolvedDataDir $InstallDir
 @{ installed = $true; installedAt = (Get-Date).ToString("s"); installDir = $InstallDir; dataDir = $Script:ResolvedDataDir } |
     ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 
@@ -4083,5 +4396,20 @@ if ($cfgIsBlank) {
     Write-Host "  config:      BLANK -- edit $InstallDir\config.json (models) and $InstallDir\.env (keys) before use"
 } else {
     Write-Host "  config:      present (user-filled config.json detected)"
+}
+# v21 (t_69654390): show the user exactly what landed in the install
+# dir (acceptance: print "which top-level directories were actually
+# copied"). With the v21 /XD list, no dev-era residue should appear.
+$dirList = $Script:CopiedTopDirs
+if (-not $dirList -or $dirList.Count -eq 0) {
+    $dirList = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Name }) | Sort-Object
+}
+if ($dirList.Count -gt 0) {
+    Write-Host "  copied:      top-level: $($dirList -join ', ')"
+}
+$devResidue = @($dirList | Where-Object { $_ -match '^(tests?|\.pytest_cache|\.github|docs|\.mypy_cache|\.ruff_cache|\.coverage|htmlcov|coverage|__pycache__|backup-.*|backups|\.cache|\.nyc_output|\.tox)$' -or $_ -eq 'tsconfig.test.json' })
+if ($devResidue.Count -gt 0) {
+    Write-Warning "[install] dev-era residue still present at top level: $($devResidue -join ', ') -- check the /XD exclusion list"
 }
 Write-Host "==========================================================="
