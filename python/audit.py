@@ -16,7 +16,7 @@ import sqlite3
 
 SCHEMA_VERSION = 1
 
-DECISIONS = ("allow_once", "allow_always", "deny")
+DECISIONS = ("allow_once", "allow_session", "allow_always", "deny")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (

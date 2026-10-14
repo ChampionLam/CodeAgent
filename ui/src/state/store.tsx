@@ -26,6 +26,7 @@ import {
   type ConversationRepo, type PersistedConversation
 } from './persistence';
 import { hasSidecarStore } from './sidecarRepo';
+import { dequeue, isSendable, nextQueuedId, removeQueued, type QueuedTurn } from './sendQueue';
 
 export type View = 'chat' | 'usage' | 'settings';
 
@@ -201,6 +202,12 @@ interface State {
   sessionOverrides: Record<string, TurnOverrides>;
   /** 子代理进度（subagent.* 事件驱动）：输入区上方那条状态条读它。null = 本会话还没派过。 */
   subagentBatch: SubagentBatch | null;
+  /**
+   * 排队待发的话（2026-10-14 用户诉求「长任务期间也要能发消息」）：模型
+   * 跑长任务时用户的话先排在这里，本轮一结束自动送出。「停止」只停当前
+   * 这轮，不动队列。排队话不落消息流 —— 送出那一刻才像手打的一样出现。
+   */
+  queuedTurns: QueuedTurn[];
 }
 
 interface Actions {
@@ -233,10 +240,17 @@ interface Actions {
   toggleSidebar(): void;
   setActiveModel(id: string): void;
   /** 会话内审批卡：允许（remember=true 时走「总是允许」口径）。 */
-  approveApproval(id: string, remember: boolean): void;
+  approveApproval(id: string, scope?: 'once' | 'session' | 'always'): void;
   /** 会话内审批卡：拒绝，拒绝结果照旧回给模型改路线。 */
   denyApproval(id: string): void;
   send(text: string, images?: string[]): void;
+  /**
+   * 生成中用户按下发送：这句话进队（FIFO），本轮一结束自动送出。
+   * 返回排队 id（撤销用）。空闲时等价于 send —— 直接发，不排队。
+   */
+  enqueueSend(text: string, images?: string[], sessionId?: string): string | null;
+  /** 撤销一句排队话（还没送出的才有得撤）。 */
+  cancelQueuedTurn(id: string): void;
   stopStreaming(): void;
   updateModel(id: string, patch: Partial<ModelConfig>): void;
   addModel(m: ModelConfig): void;
@@ -629,6 +643,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /** 子代理进度：只在内存里，不落库（重开应用只剩合并后的结果，这个不复活）。 */
   const [subagentBatch, setSubagentBatch] = useState<SubagentBatch | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  // 排队待发的话（见 State.queuedTurns 注释）：跟 subagentBatch 一样只在内存里。
+  const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
+  const queuedTurnsRef = useRef<QueuedTurn[]>([]);
+  useEffect(() => { queuedTurnsRef.current = queuedTurns; }, [queuedTurns]);
+  /** 最新一次 send：排队的话要在本轮结束后自动送出，那时闭包里的旧值不能信。 */
+  const sendRef = useRef<((text: string, images?: string[], sessionId?: string) => void) | null>(null);
+
+  /** 入队：只进队列、不写消息流（写进去用户会以为已经发出去了）。 */
+  const enqueueSend = useCallback((text: string, images?: string[], sessionId?: string): string | null => {
+    const sid = sessionId || activeSessionId;
+    if (!sid || !isSendable(text, images)) return null;
+    const turn: QueuedTurn = {
+      id: nextQueuedId(),
+      sessionId: sid,
+      text,
+      images: images && images.length ? [...images] : undefined
+    };
+    setQueuedTurns(prev => [...prev, turn]);
+    return turn.id;
+  }, [activeSessionId]);
+
+  /** 撤销一条排队的话（用户改主意了）。 */
+  const cancelQueuedTurn = useCallback((id: string): void => {
+    setQueuedTurns(prev => removeQueued(prev, id));
+  }, []);
+
+  /**
+   * 本轮结束（isStreaming 落回 false）就把队头那句自动送出，发到**它自己的会话**
+   * —— 用户可能在别的会话里排的队，不能串门（2026-10-14 用户报「长任务期间不能
+   * 发消息」）。送出那一刻才走 send()，所以消息流里的出现顺序跟手打的一样。
+   */
+  useEffect(() => {
+    if (isStreaming) return;
+    const next = dequeue(queuedTurnsRef.current);
+    if (!next) return;
+    const head = next.turn;
+    setQueuedTurns(next.rest);
+    sendRef.current?.(head.text, head.images, head.sessionId);
+  }, [isStreaming, queuedTurns]);
   const [userCollapsed, setUserCollapsed] = useState(false);
   const [narrowExpanded, setNarrowExpanded] = useState(false);
   const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1000);
@@ -1072,6 +1125,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             payload: formatArguments(data.arguments),
             reason: sanitizeApprovalReason(String(data.reason ?? '')),
             canAlwaysAllow: data.canAlwaysAllow === true,
+            canSessionAllow: data.canSessionAllow === true,
+            signature: typeof data.signature === 'string' ? data.signature : undefined,
             decision: null,
             createdAt: Date.now()
           };
@@ -1574,12 +1629,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  /** 会话内审批卡：允许。设计已取消「总是允许」（后端 canAlwaysAllow 一律 false），
-   *  所以这里恒发 allow_once —— 不做「一次点头永久放行」。 */
-  const approveApproval = useCallback((id: string, _remember: boolean) => {
+  /** 会话内审批卡：允许。scope = once | session | always（2026-10-14 用户口径：
+   *  「应该要加上类似 hermes 这种 session 内允许、一直允许」）。
+   *  后端自己会拒绝对 hardline（不可逆）的记忆，那种档位这里也不给这两个按钮。 */
+  const approveApproval = useCallback((id: string, scope: 'once' | 'session' | 'always' = 'once') => {
     setPendingApprovalId(curr => (curr === id ? null : curr));
     setMessages(prev => decideApprovalInMessages(prev, activeSessionId, id, 'allowed'));
-    void getAgent()?.approval(id, 'allow_once').catch(() => undefined);
+    const decision = scope === 'always' ? 'allow_always'
+      : scope === 'session' ? 'allow_session' : 'allow_once';
+    void getAgent()?.approval(id, decision).catch(() => undefined);
   }, [activeSessionId]);
 
   /** 会话内审批卡：拒绝。拒绝结果照旧回给模型让它改路线（不卡死、不死循环）。 */
@@ -1665,8 +1723,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [pendingRun]);
 
-  const send = useCallback((text: string, images?: string[]) => {
-    const id = activeSessionId;
+  const send = useCallback((text: string, images?: string[], sessionId?: string) => {
+    const id = sessionId || activeSessionId;
     const nowMs = Date.now();
     // 不再往正文里拼「[附带 N 个文件]」：附件在消息下方本来就有卡片，
     // 正文里多这一行只是噪音（2026-09-27 用户口径「这里的附带一个文件不要了」）。
@@ -1770,6 +1828,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
+  // 排队自动送出要用「最新」的 send（send 本身依赖 activeSessionId 会重建）。
+  useEffect(() => { sendRef.current = send; }, [send]);
+
   const stopStreaming = useCallback(() => {
     const agent = getAgent();
     const cid = chatIdRef.current;
@@ -1828,7 +1889,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     flowsWaiting,
     turnOverrides: (turnOverridesBySession[activeSessionId] || {})[activeModelId] || {},
     sessionOverrides: turnOverridesBySession[activeSessionId] || {},
-    subagentBatch
+    subagentBatch,
+    queuedTurns
   };
 
   const actions: Actions = {
@@ -1840,7 +1902,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     renameSession, deleteSession, togglePin, exportSession,
     refreshModels, saveModel, removeModel, setDefaultModel,
     dismissCompactionNotice, setThinkingDisplay, setTurnOverride, setModelOverride,
-    setAppSettings, resumeRun, dismissPendingRun, setComposerDraft
+    setAppSettings, resumeRun, dismissPendingRun, setComposerDraft,
+    enqueueSend, cancelQueuedTurn
   };
 
   return <Ctx.Provider value={{ ...state, ...actions }}>{children}</Ctx.Provider>;

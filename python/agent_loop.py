@@ -109,7 +109,10 @@ EVENT_NOTICE = "chat.notice"                       # 轻提示（如「网络中
 # 超过总窗口就不要再自己试了 —— 报中断、落断点，等用户点「继续」。
 NET_RETRY_MAX = 3
 NET_RETRY_BASE = 2.0            # 秒：2 → 4 → 8
-NET_RETRY_WINDOW = 120.0        # 秒
+# 重试窗口 =「重试阶段」的预算（不是本轮时长）—— 2026-10-14 修：
+# 窗口必须容得下一次完整的模型读超时，否则 timeout 一次（默认 180s）就
+# elapsed > 窗口，重试直接被跳过，用户看到的就是「一次超时 = 立刻中断」。
+NET_RETRY_WINDOW = 300.0        # 秒
 NET_RETRY_CODES = ("NETWORK", "TIMEOUT")
 NET_RETRY_HTTP = (408, 429, 500, 502, 503, 504)
 
@@ -123,7 +126,18 @@ CANCELLED = "CANCELLED"
 INTERNAL = "INTERNAL"
 CONTEXT_TRIPPED = "CONTEXT_TRIPPED"
 
-_VALID_DECISIONS = ("allow_once", "allow_always", "deny")
+_VALID_DECISIONS = ("allow_once", "allow_session", "allow_always", "deny")
+
+# 审批记忆（2026-10-14）：纯逻辑模块，取不到就当这个能力不存在（照旧每次都问）。
+try:
+    from approval_memory import can_remember as _can_remember_tier
+    from approval_memory import signature as _approval_signature
+except Exception:                                     # pragma: no cover - 兜底
+    def _can_remember_tier(tier: str) -> bool:        # type: ignore[misc]
+        return False
+
+    def _approval_signature(name: str, args: dict | None) -> str:   # type: ignore[misc]
+        return ""
 
 
 @dataclass
@@ -169,6 +183,13 @@ class LoopDeps:
     run_id: str = ""
     #: 断点回调：callable(payload) -> None。payload 见 _checkpoint()。None = 不记断点。
     checkpoint: Any | None = None
+    #: 审批记忆（2026-10-14「本会话内允许 / 一直允许」）：
+    #: callable(name, args) -> "" | "session" | "always"。空 = 没记住，照旧弹卡。
+    approval_lookup: "Callable[[str, dict], str]" = lambda _n, _a: ""
+    #: 用户点了「本会话内允许 / 一直允许」时记一次：
+    #: callable(name, args, scope, tier) -> bool。hardline 由实现拒绝（返回 False）。
+    approval_remember: "Callable[[str, dict, str, str], bool]" = \
+        lambda _n, _a, _s, _t: False
 
 
 def default_deps(*, llm_stream=None, request_approval=None, **overrides) -> LoopDeps:
@@ -555,7 +576,7 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
     action_nudges = 0                  # whole-run budget: "说了要做却没调用" 纠一次
     dup_refusals = 0                   # whole-run budget: 重复调用拒几次后再终止
     net_retries = 0                    # 本轮已自动重试次数（断网退避）
-    net_retry_started = time.monotonic()
+    net_retry_started = None           # 第一次可重试错误的时间（None = 还没出过错）
     done_call_ids: set = set()         # 已执行完的调用 id（断点用：续跑不重做）
 
     while rounds < max(1, ctx.max_loop):
@@ -633,24 +654,24 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                 usage = ev.get("usage")
                 tool_calls = list(ev.get("toolCalls") or [])
             elif kind == "error":
-                # Mount point 2: ask the governor what to do before giving up.
                 error: dict = {"code": ev.get("code") or "UNKNOWN",
                                "message": ev.get("message") or ""}
                 if ev.get("httpStatus") is not None:
                     error["httpStatus"] = ev.get("httpStatus")
-                governor = deps.context_governor
-                decision = None
-                if governor is not None:
-                    try:
-                        decision = governor.on_request_error(send_messages, error)
-                    except Exception:
-                        decision = None
-                if decision is None:
-                    # 断网/瞬时故障：先自己退避重试几次（用户口径：2-3 次、
-                    # 总窗口 2 分钟）；超出就报中断落断点，等用户点「继续」。
-                    elapsed = time.monotonic() - net_retry_started
-                    if (_is_retryable(error) and net_retries < NET_RETRY_MAX
-                            and elapsed < NET_RETRY_WINDOW):
+                # 断网/瞬时故障：先自己退避重试 2-3 次，再谈别的。
+                # 2026-10-14 真机验证（隔离实例 + 停机桩模型）发现旧顺序是错的：
+                # 旧代码先问 context governor，而 governor 对**任何**非溢出错误都回
+                # {"action": "propagate"} —— decision 非 None，下面这段重试永远走不到，
+                # 于是「一次读超时 = 立刻中断落断点」，用户报的「特别容易超时」就是它
+                # （窗口 120s < 读超时 180s 那处只是把这段死代码又盖了一层，改了也没用，
+                # 真机 A/B 两臂都只发了 1 次模型请求）。
+                # 网络故障本来就不是上下文问题，所以判定归这里；governor 只处理溢出类。
+                now = time.monotonic()
+                if net_retry_started is None:
+                    net_retry_started = now
+                elapsed = now - net_retry_started
+                if _is_retryable(error):
+                    if net_retries < NET_RETRY_MAX and elapsed < NET_RETRY_WINDOW:
                         net_retries += 1
                         net_retry_wait = min(NET_RETRY_BASE * (2 ** (net_retries - 1)),
                                              max(1.0, NET_RETRY_WINDOW - elapsed))
@@ -659,17 +680,25 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                                           % (error.get("message") or "网络异常",
                                              int(net_retry_wait), net_retries)}
                         break
-                    if _is_retryable(error):
-                        yield {"type": EVENT_ERROR, "code": error["code"],
-                               # 显式标记「这是瞬时故障」：光看错误码不行 ——
-                               # 限流会包成 HTTP_ERROR，只看码会误判成「不可续」
-                               # （2026-09-25 端到端实测踩过：免费模型限流后没有
-                               # 「继续」入口，但提示词里却写着「点继续即可」）。
-                               "retryable": True, "httpStatus": error.get("httpStatus"),
-                               "message": "%s（已自动重试 %d 次仍未恢复，已存断点，"
-                                          "恢复网络后点「继续」即可接着跑）"
-                                          % (error.get("message") or "", net_retries)}
-                        return
+                    yield {"type": EVENT_ERROR, "code": error["code"],
+                           # 显式标记「这是瞬时故障」：光看错误码不行 ——
+                           # 限流会包成 HTTP_ERROR，只看码会误判成「不可续」
+                           # （2026-09-25 端到端实测踩过：免费模型限流后没有
+                           # 「继续」入口，但提示词里却写着「点继续即可」）。
+                           "retryable": True, "httpStatus": error.get("httpStatus"),
+                           "message": "%s（已自动重试 %d 次仍未恢复，已存断点，"
+                                      "恢复网络后点「继续」即可接着跑）"
+                                      % (error.get("message") or "", net_retries)}
+                    return
+                # Mount point 2: governor 只处理它真认得的问题（上下文溢出等）。
+                governor = deps.context_governor
+                decision = None
+                if governor is not None:
+                    try:
+                        decision = governor.on_request_error(send_messages, error)
+                    except Exception:
+                        decision = None
+                if decision is None:
                     yield {"type": EVENT_ERROR, "code": error["code"],
                            "message": error["message"]}
                     return
@@ -826,16 +855,21 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                     return
                 continue
 
-            # 权限口径（2026-09-25，参照 Hermes Agent 的通行做法）：只按命令模式拦，其余放行。
-            # 审批事件与 tools.list 的键名保持原契约（level / requiresApproval /
-            # canAlwaysAllow / reason），值换成新口径：level 填 tier
-            # （hardline / dangerous / ""），canAlwaysAllow 恒 false（没有
-            # 「总是允许」了）。键名由界面侧另一路收尾时再统一改。
+            # 权限口径（2026-09-25 定稿；2026-10-14 加审批记忆）：只按命令模式拦，
+            # 其余放行。审批事件的键名保持原契约（level / requiresApproval /
+            # canAlwaysAllow / reason），值换新口径：level 填 tier
+            # （hardline / dangerous / ""）；canAlwaysAllow / canSessionAllow
+            # 由档位决定 —— hardline（不可逆）一律 false，永不记忆。
             verdict = deps.judge(name, args)
             tier = str(getattr(verdict, "tier", "") or "")
             requires = bool(getattr(verdict, "requires_approval", False))
-            can_always = False
+            can_memorize = requires and bool(_can_remember_tier(tier))
+            can_always = can_memorize
+            can_session = can_memorize
             reason = str(getattr(verdict, "reason", "") or "")
+            # 用户点头过同一种操作（本会话内允许 / 一直允许）→ 不再弹卡，
+            # 按记忆的档位放行（audit 里记下是哪种）。
+            remembered = str(deps.approval_lookup(name, args) or "") if requires else ""
 
             # 拒绝指纹闸（t_7738a2bc）：用户已 deny 过的操作再提 → 不弹卡，
             # 直接以 DENIED_REPEAT 回给模型。确定性拦截，不依赖模型自觉。
@@ -857,17 +891,31 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
 
             yield {"type": EVENT_TOOL_CALL, "id": call_id, "name": name, "arguments": args,
                    "level": tier, "requiresApproval": requires,
-                   "canAlwaysAllow": can_always, "reason": reason}
+                   "canAlwaysAllow": can_always, "canSessionAllow": can_session,
+                   "preapproved": remembered, "reason": reason}
 
-            if requires:
+            if requires and not remembered:
                 approval_seq += 1
                 approval_id = "apr_%d" % approval_seq
                 payload = {"approvalId": approval_id, "toolCallId": call_id, "name": name,
                            "arguments": args, "level": tier, "reason": reason,
-                           "canAlwaysAllow": can_always}
+                           "canAlwaysAllow": can_always, "canSessionAllow": can_session,
+                           "signature": _approval_signature(name, args)}
                 yield {"type": EVENT_APPROVAL, **payload}
                 raw_decision = deps.request_approval(payload)
                 final_decision = raw_decision if raw_decision in _VALID_DECISIONS else "deny"
+                # 「本会话内允许 / 一直允许」：记下来，下次同一种操作不再弹卡。
+                # hardline 在 can_memorize 里已经被挡掉（不会被记住）。
+                if final_decision in ("allow_session", "allow_always") and can_memorize:
+                    try:
+                        deps.approval_remember(
+                            name, args,
+                            "always" if final_decision == "allow_always" else "session",
+                            tier)
+                    except Exception:                 # noqa: BLE001 - 记不住不影响这次放行
+                        pass
+            elif remembered:
+                final_decision = "allow_session" if remembered == "session" else "allow_always"
             else:
                 final_decision = "allow_once"
 

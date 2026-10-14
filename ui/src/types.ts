@@ -213,6 +213,10 @@ export interface ApprovalRequest {
   reason: string;
   /** true = 侧栏给「总是允许」按钮（按命令前缀记住）。 */
   canAlwaysAllow?: boolean;
+  /** 本会话内允许（后端按档位给：hardline 不可逆操作不给）。2026-10-14。 */
+  canSessionAllow?: boolean;
+  /** 这次调用的判定键（审批记忆用；撤销时按它撤）。 */
+  signature?: string;
   /** null = 待决；点击允许/拒绝后落为最终决定，卡片就地变成结果行。 */
   decision: 'allowed' | 'denied' | null;
   createdAt: number;

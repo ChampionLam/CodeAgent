@@ -97,6 +97,8 @@ SIDECAR_CAPABILITIES: list[str] = [
     # t_2d0783e3: agent 可在对话里改默认工作目录（写 capabilities.workspaceRoot）
     "workspace.set",
     "heal.trigger", "heal.history",
+    # 2026-10-14：审批记忆（本会话内允许 / 一直允许）的读取与撤销
+    "approval.list", "approval.forget",
 ]
 
 
@@ -340,6 +342,49 @@ _DATA_DIR = os.environ.get("DESK_AGENT_DATA_DIR") or os.path.join(_REPO_ROOT, "d
 _LESSONS = None
 
 
+def _pid_alive(pid: int) -> bool:
+    """进程存活探针。
+
+    Windows 上不能拿 os.kill(pid, 0) 探活：CPython 在 Windows 把它实现成
+    TerminateProcess(handle, 0) —— 既会真的把对方**杀掉**，又对已退出的 pid 抛
+    OSError(EINVAL)，而这里原来的兜底 `except Exception: return True` 会把死进程
+    判成存活。后果（2026-10-14 真机复现）：应用被强杀一次后 locks/sidecar.lock
+    永远清不掉，之后每次启动都被判「duplicate」退出，重试 3 次耗尽 → 界面显示
+    侧车 crashed，应用再也起不来。改用 OpenProcess + GetExitCodeProcess 探活。
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":                           # pragma: no cover - Windows 分支
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == STILL_ACTIVE
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+
+
 def _acquire_data_dir_lock():
     """t_5d29bcab：侧车自锁 —— 对数据目录加互斥，防止两个 sidecar 进程
     同时写 sessions.db / 断点库。
@@ -356,17 +401,6 @@ def _acquire_data_dir_lock():
     lock_root = os.path.join(_DATA_DIR, "locks")
     lock_dir = os.path.join(lock_root, "sidecar.lock")
     pid_file = os.path.join(lock_dir, "pid")
-
-    def _pid_alive(pid):
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except Exception:
-            return True
 
     def _read_holder():
         try:
@@ -584,6 +618,27 @@ def _api_messages_from_rows(rows: list) -> list:
     return out
 
 
+def _finish_run_record(run_rec: dict | None, finished_ok: bool) -> None:
+    """这一轮的 run 记录收尾：正常跑完记 done，中断/报错记 interrupted。
+
+    2026-10-14 修：以前正常跑完**不收尾**，记录一直留在 running，下次启动
+    sweep_on_start 把它判成「被中断」，界面上就凭空多一条「上次任务未完成」。
+    中断/报错必须记 interrupted —— 只有 RESUMABLE 状态才有「继续」入口。
+    """
+    if not run_rec:
+        return
+    store = _run_store()
+    if store is None:
+        return
+    rc = _run_status_consts()
+    status = rc.STATUS_DONE if finished_ok else rc.STATUS_INTERRUPTED
+    try:
+        store.finish(run_rec.get("run_id", ""), status=status,
+                     reason="本轮完成" if finished_ok else "本轮未正常收尾，等「继续」")
+    except Exception as exc:                              # noqa: BLE001
+        log("warn", "run record close failed: %s" % exc)
+
+
 def _close_resumed_run(run_id: str) -> None:
     """续跑这一轮真跑完了，才把旧断点收尾（见 _apply_resume 里的说明）。"""
     if not run_id:
@@ -634,6 +689,18 @@ def _apply_resume(params: dict, messages: list) -> tuple[list, str]:
             log("warn", "resume requested but not resumable: %s" % run_id)
             return messages, ""
         sid = prev.get("session_id") or params.get("sessionId")
+        # 同一条断点不许被续两次：续跑刚起来时旧记录还是 interrupted，界面把横幅又
+        # 亮出来、用户手快再点一次，就变成两个 run 抢同一份上下文（真机 2026-10-14）。
+        try:
+            for other in store.list_all():
+                if (other.get("session_id") == sid
+                        and other.get("status") == rc.STATUS_RUNNING
+                        and other.get("resumed_from") == run_id):
+                    log("warn", "resume ignored: %s 已经在被 %s 续跑"
+                        % (run_id, other.get("run_id")))
+                    return messages, ""
+        except Exception as exc:                              # noqa: BLE001
+            log("warn", "resume guard skipped: %s" % exc)
         rebuilt = []
         if sid:
             try:
@@ -1161,7 +1228,7 @@ def _wait_for_approval(chat_id: str, payload: dict, timeout: float = 300.0) -> s
             log("WARN", "approval %s timed out after %ss -> deny" % (approval_id, timeout))
             return "deny"
         decision = slot["decision"]
-        return decision if decision in ("allow_once", "allow_always", "deny") else "deny"
+        return decision if decision in ("allow_once", "allow_session", "allow_always", "deny") else "deny"
     finally:
         with _APPROVAL_LOCK:
             _APPROVALS.pop(approval_id, None)
@@ -2186,6 +2253,55 @@ def _persist_tools_disabled(names: list[str]) -> None:
     _atomic_write_config(root, raw)
 
 
+# ── 审批记忆（2026-10-14）：本会话内允许 / 一直允许 ──────────────────────
+# 用户口径：「这个安全提示有点烦了，应该要加上类似 hermes 这种 session 内允许、
+# 一直允许这种操作」。本会话的活在内存（按 session 隔离），一直允许落 config.json。
+_APPROVAL_MEMS: dict = {}
+_APPROVAL_MEM_LOCK = threading.Lock()
+
+
+def _always_allow_list() -> list:
+    """config.json 里记着的「一直允许」（capabilities.approvalAllow）。"""
+    try:
+        raw = appconfig.load(root=_tools_config_root())
+    except Exception:                                     # noqa: BLE001
+        return []
+    caps = raw.get("capabilities") if isinstance(raw, dict) else None
+    rows = caps.get("approvalAllow") if isinstance(caps, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("fp")]
+
+
+def _persist_always_allow(rows: list) -> None:
+    """把「一直允许」原子写回 config.json（其它键一律保留）。"""
+    root = _tools_config_root()
+    try:
+        raw = appconfig.load(root=root)
+    except appconfig.AppConfigError:
+        raw = {}
+    caps = raw.get("capabilities")
+    if not isinstance(caps, dict):
+        caps = {}
+        raw["capabilities"] = caps
+    caps["approvalAllow"] = list(rows)
+    _atomic_write_config(root, raw)
+
+
+def _approval_memory_for(session_id: str | None):
+    """这个会话的审批记忆（同一会话复用同一个实例）。"""
+    import approval_memory as approval_memory_mod
+    key = str(session_id or "")
+    with _APPROVAL_MEM_LOCK:
+        mem = _APPROVAL_MEMS.get(key)
+        if mem is None:
+            mem = approval_memory_mod.ApprovalMemory(
+                session_id=key, always=_always_allow_list(),
+                on_change=_persist_always_allow)
+            _APPROVAL_MEMS[key] = mem
+        return mem
+
+
 def _persist_workspace_root(path: str) -> None:
     """t_2d0783e3：把 capabilities.workspaceRoot 原子写回 config.json。
 
@@ -2469,16 +2585,31 @@ def handle_request(req: dict, _dispatch: bool = True):
         return _make_ok_response(req_id, {"accepted": True,
                                           "useTools": bool(params.get("useTools", False))})
 
+    if method in ("approval.list", "approval.forget"):
+        # 审批记忆的查看 / 撤销（「一直允许」必须能撤，否则用户回不了头）。
+        mem = _approval_memory_for(str(params.get("sessionId") or ""))
+        if method == "approval.list":
+            return _make_ok_response(req_id, {"allow": mem.list_always()})
+        fp = str(params.get("fingerprint") or "")
+        if not fp and params.get("all") is not True:
+            return _make_error_response(
+                req_id, "BAD_REQUEST",
+                "params.fingerprint is required (or all=true to clear every remembered allow)")
+        removed = mem.forget(fp)
+        return _make_ok_response(req_id, {"removed": removed,
+                                          "allow": mem.list_always()})
+
     if method == "approval.respond":
         approval_id = params.get("approvalId")
         decision = params.get("decision")
         if not isinstance(approval_id, str) or not approval_id:
             return _make_error_response(req_id, "BAD_REQUEST",
                                         "params.approvalId is required")
-        if decision not in ("allow_once", "allow_always", "deny"):
+        if decision not in ("allow_once", "allow_session", "allow_always", "deny"):
             return _make_error_response(
                 req_id, "BAD_REQUEST",
-                "params.decision must be one of allow_once | allow_always | deny")
+                "params.decision must be one of allow_once | allow_session | "
+                "allow_always | deny")
         with _APPROVAL_LOCK:
             slot = _APPROVALS.get(approval_id)
             if slot is None:
@@ -3160,6 +3291,9 @@ def _run_chat(req_id, params) -> None:
     deps = agent_loop.default_deps(
         request_approval=lambda payload: _wait_for_approval(req_id, payload),
         is_cancelled=cancelled,
+        # 审批记忆（2026-10-14）：本会话内允许 / 一直允许 —— 记得住就不再弹卡。
+        approval_lookup=_approval_memory_for(session_id).lookup,
+        approval_remember=_approval_memory_for(session_id).remember,
         audit=_audit_store(),
         lessons=_lessons_store(),
         run_id=(run_rec or {}).get("run_id", ""),
@@ -3270,6 +3404,7 @@ def _run_chat(req_id, params) -> None:
 
     n_reason = 0
     n_text = 0
+    finished_ok = False        # 这一轮是否走到 chat.done（收尾时决定 run 记 done 还是 interrupted）
     reason_parts: list[str] = []
     text_parts: list[str] = []
     try:
@@ -3286,6 +3421,7 @@ def _run_chat(req_id, params) -> None:
             elif kind == "chat.done":
                 data.setdefault("reasoningChars", n_reason)
                 data.setdefault("textChars", n_text)
+                finished_ok = True
                 # 这一轮真跑完了，旧断点才算收尾（提前收会把断点烧掉）
                 _close_resumed_run(resumed_from)
             # Session persistence capture: fold tool events as they stream by
@@ -3300,6 +3436,10 @@ def _run_chat(req_id, params) -> None:
         log("ERROR", "chat worker failed: %r" % (e,))
         _emit("chat.error", {"id": req_id, "code": "INTERNAL", "message": str(e)})
     finally:
+        # 本轮的 run 记录必须收尾：不收的话下次启动 sweep_on_start 会把它判成
+        # 「被中断」，界面上就凭空多一条「上次任务未完成」—— 真机 2026-10-14 一晚上
+        # 弹了 9 次续跑横幅，其中一部分就是跑完的轮次留在 running 上。
+        _finish_run_record(run_rec, finished_ok)
         # Persist whatever the loop produced (soft archive: partial rounds are
         # kept too). persist_chat_result swallows its own failures, so this
         # can never turn a chat into a crash.

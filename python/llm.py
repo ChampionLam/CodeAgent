@@ -104,7 +104,10 @@ def load_config(root: str | None = None) -> ModelConfig:
     if not os.path.exists(path):
         raise ConfigError("找不到配置文件: " + path)
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig：Windows 上记事本/PowerShell 写出的 UTF-8 带 BOM，带 BOM 的
+        # config.json 以前直接判「不是合法 JSON」，模型配置整套失效（真机
+        # 2026-10-14 复现：界面显示「未配置」，侧车模型层永久降级）。
+        with open(path, encoding="utf-8-sig") as f:
             raw = json.load(f)
     except json.JSONDecodeError as e:
         raise ConfigError("配置不是合法 JSON: %s" % e) from e

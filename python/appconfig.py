@@ -38,7 +38,10 @@ def load(root: str | None = None) -> dict[str, Any]:
     if not os.path.exists(path):
         raise AppConfigError("找不到配置文件: " + path)
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig：Windows 上记事本 / PowerShell 存 UTF-8 会带 BOM，带 BOM 的
+        # config.json 以前会被读成「不是合法 JSON」，模型配置整套失效（新装实例
+        # 界面显示「未配置」）。utf-8-sig 对无 BOM 文件与 utf-8 等价。
+        with open(path, encoding="utf-8-sig") as f:
             raw = json.load(f)
     except json.JSONDecodeError as e:
         raise AppConfigError("配置不是合法 JSON: %s" % e) from e
@@ -79,7 +82,7 @@ def read_env_file(path: str) -> dict[str, str]:
     out: dict[str, str] = {}
     if not os.path.exists(path):
         return out
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:      # BOM 容忍，理由同 load()
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:

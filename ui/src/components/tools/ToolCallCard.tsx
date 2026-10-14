@@ -56,6 +56,11 @@ export function ToolCallCard({ call, defaultOpen = false }: { call: ToolCall; de
   const Glyph = ToolGlyph[call.name as keyof typeof ToolGlyph] ?? ToolGlyph.default;
   const duration = fmtDuration(call.startedAt, call.endedAt);
   const isLive = call.status === 'running' || call.status === 'awaiting';
+  // 工具产出媒体时，结果里带的是路径 —— 这些图/视频要直接给用户看，
+  // 不藏在「展开详情」后面（2026-10-14 用户报：生图跑完看不到图）。
+  const mediaRefs = call.result
+    ? imageRefsIn(call.result).filter(r => resolveImageSrc(r))
+    : [];
 
   return (
     <div className={`toolcard toolcard--${call.status} ${open ? 'is-open' : ''}`}>
@@ -88,6 +93,14 @@ export function ToolCallCard({ call, defaultOpen = false }: { call: ToolCall; de
 
       {isLive && <span className="toolcard__progress shimmer" aria-hidden />}
 
+      {mediaRefs.length > 0 && (
+        <div className="toolcard__images">
+          {mediaRefs.slice(0, 6).map(p => (
+            <MediaRef key={p} value={p} className="toolcard__image" />
+          ))}
+        </div>
+      )}
+
       {open && (
         <div className="toolcard__body">
           {call.result && (
@@ -100,18 +113,6 @@ export function ToolCallCard({ call, defaultOpen = false }: { call: ToolCall; de
               >
                 {call.result}
               </pre>
-              {(() => {
-                // A tool that produced media says so as a path — show it.
-                const refs = imageRefsIn(call.result).filter(r => resolveImageSrc(r));
-                if (!refs.length) return null;
-                return (
-                  <div className="toolcard__images">
-                    {refs.slice(0, 6).map(p => (
-                      <MediaRef key={p} value={p} className="toolcard__image" />
-                    ))}
-                  </div>
-                );
-              })()}
             </div>
           )}
 

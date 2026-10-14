@@ -57,9 +57,10 @@ def stream_from(errors, then=None):
     return stream
 
 
-def make_deps(llm_stream, checkpoint=None, run_id="r-test"):
+def make_deps(llm_stream, checkpoint=None, run_id="r-test", governor=None):
     deps = LoopDeps(
         llm_stream=llm_stream,
+        context_governor=governor,
         request_approval=lambda payload: "allow_once",
         load_model_config=lambda: FakeConfig(),
         exec_tool=lambda name, args, workspace_root: FakeToolResult(),
@@ -205,6 +206,84 @@ class NetRetryTest(unittest.TestCase):
         self.assertTrue(notices, "要告诉用户「正在重试」")
         self.assertEqual(events[-1]["type"], AL.EVENT_DONE, "恢复后这一轮要正常收尾")
         self.assertNotIn("interrupt", [e["event"] for e in rec.events])
+
+    def test_slow_timeout_is_still_retried(self):
+        """慢调用（读超时）之后必须还有一次自动重试。
+
+        2026-10-14 真机缺陷：重试窗口从**本轮开始**起算（旧 NET_RETRY_WINDOW=120s），
+        而单次读超时默认 180s —— 第一次超时就让 elapsed(180) > 窗口(120)，
+        于是 `elapsed < NET_RETRY_WINDOW` 不成立、重试被跳过。用户看到的就是
+        「特别容易超时」：一次超时 = 立刻中断落断点，提示词里写的「自动重试 2-3 次」
+        对超时类故障从来没发生过。
+
+        这里把窗口压到 0.05s、让第 1 次尝试先耗 0.1s 再报 NETWORK（模拟慢的那次）：
+        窗口按「本轮已耗时」算 → 0.1 > 0.05，不重试（红）；
+        窗口按「第一次出错之后」算 → ≈0 < 0.05，重试（绿）。
+        """
+        import time
+
+        old_window = AL.NET_RETRY_WINDOW
+        AL.NET_RETRY_WINDOW = 0.05
+        self.addCleanup(setattr, AL, "NET_RETRY_WINDOW", old_window)
+        rec = CheckpointRecorder()
+        attempts = {"n": 0}
+
+        def stream(cfg, messages, **kw):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                time.sleep(0.1)          # 慢调用：一次读超时就长这样
+                yield {"type": "error", "code": "NETWORK",
+                       "message": "TimeoutError: The read operation timed out"}
+                return
+            yield {"type": "delta", "text": "第二次连上了"}
+            yield {"type": "done", "finishReason": "stop", "usage": {}, "toolCalls": []}
+
+        events = list(run(ctx(), deps=make_deps(stream, checkpoint=rec)))
+        self.assertEqual(attempts["n"], 2, "一次慢超时之后必须还有一次自动重试")
+        self.assertEqual(events[-1]["type"], AL.EVENT_DONE, "重试成功要正常收尾")
+        self.assertNotIn("interrupt", [e["event"] for e in rec.events],
+                         "能重试成功就不该落成中断")
+
+    def test_network_retry_survives_a_propagating_governor(self):
+        """governor 在场时，断网重试也必须发生（2026-10-14 真机缺陷）。
+
+        旧代码先问 context governor：它对**任何**非溢出错误都回
+        {"action": "propagate"}，decision 非 None 就照它走 —— 于是那段断网重试
+        永远执行不到。真机 A/B（隔离实例 + 停机桩模型）两臂都只发出 1 次模型
+        请求，界面直接报「[错误] NETWORK: TimeoutError: timed out」+「上次任务未完成」，
+        与用户截图一致；那时我把 NET_RETRY_WINDOW 从 120 改到 300，真机毫无变化，
+        因为整段逻辑都在 governor 的 return 之后。
+
+        修法：瞬时故障判定提到 governor 之前（网络故障不是上下文问题）。
+        """
+
+        class PropagatingGovernor:
+            """真机 governor 的行为：非溢出错误一律 propagate。"""
+
+            def on_request_error(self, messages, error):
+                return {"action": "propagate"}
+
+        rec = CheckpointRecorder()
+        attempts = {"n": 0}
+
+        def stream(cfg, messages, **kw):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                yield {"type": "error", "code": "NETWORK",
+                       "message": "TimeoutError: The read operation timed out"}
+                return
+            yield {"type": "delta", "text": "重试后完成"}
+            yield {"type": "done", "finishReason": "stop", "usage": {}, "toolCalls": []}
+
+        events = list(run(ctx(), deps=make_deps(stream, checkpoint=rec,
+                                                governor=PropagatingGovernor())))
+        self.assertEqual(attempts["n"], 2,
+                         "governor 在场也不能吞掉断网重试（真机两臂都只发了 1 次请求）")
+        notices = [e for e in events if e["type"] == AL.EVENT_NOTICE]
+        self.assertTrue(notices, "重试前要给用户一句「网络中断，N 秒后重试」")
+        self.assertEqual(events[-1]["type"], AL.EVENT_DONE, "重试成功要正常收尾")
+        self.assertNotIn("interrupt", [e["event"] for e in rec.events],
+                         "能重试成功就不该落成中断")
 
     def test_gives_up_after_max_retries_and_marks_resumable(self):
         rec = CheckpointRecorder()

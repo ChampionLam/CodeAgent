@@ -66,6 +66,38 @@ class LockUnitTests(unittest.TestCase):
         sidecar._release_data_dir_lock(lock_dir, pid_file)
         self.assertFalse(os.path.exists(lock_dir))
 
+    def test_pid_probe_never_kills_and_reports_dead_pids(self):
+        """探活不能变成杀进程。Windows 上 os.kill(pid, 0) 实际走 TerminateProcess：
+        既会杀掉被探测的进程，又对已退出的 pid 抛 OSError(EINVAL)（不是
+        ProcessLookupError），被兜底 except 吃成「存活」。真机 2026-10-14 复现：
+        强杀应用后 locks/sidecar.lock 永远清不掉，之后每次启动都判 duplicate，
+        重试耗尽 → 界面「侧车 crashed」，应用再也起不来。
+        """
+        import sidecar
+
+        self.assertTrue(sidecar._pid_alive(os.getpid()), "自己一定是活的")
+        self.assertTrue(sidecar._pid_alive(os.getpid()), "探活必须可重复调用（不能把自己杀了）")
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        self.assertFalse(sidecar._pid_alive(dead.pid), "已退出的真实 pid 必须判死")
+        self.assertFalse(sidecar._pid_alive(99999999), "不存在的 pid 必须判死")
+        self.assertFalse(sidecar._pid_alive(0), "pid 0 必须判死")
+
+    def test_stale_lock_left_by_killed_process_is_reclaimed(self):
+        """应用被强杀后留下的陈锁（持有者是真死进程）必须能被接管。"""
+        import sidecar
+
+        sidecar._DATA_DIR = self.tmp
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        lock_dir = os.path.join(self.tmp, "locks", "sidecar.lock")
+        os.makedirs(lock_dir)
+        with open(os.path.join(lock_dir, "pid"), "w") as fh:
+            fh.write(str(dead.pid))
+        acquired, holder, reason = sidecar._acquire_data_dir_lock()
+        self.assertTrue(acquired, "强杀残留的陈锁应被接管，否则应用再也起不来: %s" % reason)
+        self.assertEqual(holder, os.getpid())
+
 
 def _read_hello(proc, timeout_s=30.0):
     """读一帧 LSP 风格 hello；EOF/超时返回 None。"""

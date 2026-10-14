@@ -191,8 +191,24 @@ class RunStore:
         return rows[-1] if rows else None
 
     def pending_for_session(self, session_id: str) -> dict | None:
-        """这个会话有没有「可续」的运行（给界面显示「继续」按钮用）。"""
-        return self.latest_for_session(session_id, statuses=RESUMABLE)
+        """这个会话有没有「可续」的运行（给界面显示「继续」按钮用）。
+
+        2026-10-14 修：会话里只要还有 running 的运行（续跑刚起来、或新一轮在跑），
+        就不能再把旧的 interrupted 记录亮成「可续」—— 界面会在 chat.done/chat.error/
+        切会话/启动时都拉一次 run.pending，于是同一条旧断点被反复亮出来，用户再点
+        一次就是双烧同一条断点（真机日志：03:18:07 与 03:18:16 都是 resume: r-…4194）。
+        """
+        for rec in self.list_all():
+            if (rec.get("session_id") == session_id
+                    and rec.get("status") == STATUS_RUNNING):
+                return None
+        # 已经被接手过的断点不再算「待续」：它已经有后人（resumed_from 指向它），
+        # 再亮出来就是双烧同一条断点（真机 2026-10-14）。
+        rows = [r for r in self.list_all() if r.get("session_id") == session_id]
+        claimed = {r.get("resumed_from") for r in rows if r.get("resumed_from")}
+        rows = [r for r in rows
+                if r.get("status") in RESUMABLE and r.get("run_id") not in claimed]
+        return rows[-1] if rows else None
 
     def sweep_on_start(self, reason: str = "应用退出或断电") -> list[dict]:
         """启动时把还在 running 的运行判为中断；返回被判中断的那些。"""

@@ -598,9 +598,14 @@ class NewPermissionFlowTest(unittest.TestCase):
         events = list(run(self._ctx(), deps=deps))
         req = next(e for e in events if e["type"] == "approval.request")
         self.assertEqual(req["level"], "dangerous")
-        self.assertFalse(req["canAlwaysAllow"])                      # 没有「总是允许」
+        # 2026-10-14 口径（用户钦定）：危险档可以「本会话内允许 / 一直允许」，
+        # 只有不可逆的 hardline 档不给这两个口子。
+        self.assertTrue(req["canAlwaysAllow"])
+        self.assertTrue(req["canSessionAllow"])
         call = next(e for e in events if e["type"] == "tool.call")
         self.assertEqual(call["level"], "dangerous")
+        self.assertTrue(call["canAlwaysAllow"])
+        self.assertTrue(call["canSessionAllow"])
 
     def test_hardline_command_asks_with_tier(self):
         llm = self._two_round('{"command": "rm -rf /"}')
@@ -608,10 +613,70 @@ class NewPermissionFlowTest(unittest.TestCase):
         events = list(run(self._ctx(), deps=deps))
         req = next(e for e in events if e["type"] == "approval.request")
         self.assertEqual(req["level"], "hardline")
-        self.assertFalse(req["canAlwaysAllow"])
+        self.assertFalse(req["canAlwaysAllow"], "不可逆操作永不记忆（硬底线）")
+        self.assertFalse(req["canSessionAllow"], "不可逆操作永不记忆（硬底线）")
+
+    def test_remembered_approval_skips_the_card(self):
+        """「本会话内允许 / 一直允许」：点头之后同一种操作不再弹卡（2026-10-14）。
+
+        注入假记忆（只按 signature 记，不落盘），跑两轮同一条危险命令：
+        第 1 轮要弹卡、并记下 session 档；第 2 轮必须不弹卡、但命令照样真执行。
+        """
+        sig = AL._approval_signature
+
+        remembered: dict = {}
+
+        def lookup(name, args):
+            return remembered.get(sig(name, args), "")
+
+        def remember(name, args, scope, tier):
+            if not AL._can_remember_tier(tier):
+                return False
+            remembered[sig(name, args)] = scope
+            return True
+
+        def _deps_with_memory(llm):
+            d = guard_deps(llm, approval="allow_session")
+            d.approval_lookup = lookup
+            d.approval_remember = remember
+            return d
+
+        first = _deps_with_memory(self._two_round('{"command": "rm -rf ./build"}'))
+        events1 = list(run(self._ctx(), deps=first))
+        self.assertIn("approval.request", kinds(events1), "第一次要问")
+        self.assertEqual(list(remembered.values()), ["session"], "要点成 session 档")
+
+        second = _deps_with_memory(self._two_round('{"command": "rm -rf ./build"}'))
+        events2 = list(run(self._ctx(), deps=second))
+        self.assertNotIn("approval.request", kinds(events2), "记住了就别再问")
+        self.assertEqual(len(second._execs), 1, "不问 ≠ 不执行")
+
+    def test_hardline_is_never_remembered(self):
+        """不可逆操作给了「一直允许」也不记 —— 下一轮照样弹卡。"""
+        sig = AL._approval_signature
+
+        remembered: dict = {}
+
+        def lookup(name, args):
+            return remembered.get(sig(name, args), "")
+
+        def remember(name, args, scope, tier):
+            if not AL._can_remember_tier(tier):
+                return False
+            remembered[sig(name, args)] = scope
+            return True
+
+        for _ in range(2):
+            llm = self._two_round('{"command": "rm -rf /"}')
+            d = guard_deps(llm, approval="allow_always")
+            d.approval_lookup = lookup
+            d.approval_remember = remember
+            events = list(run(self._ctx(), deps=d))
+            self.assertIn("approval.request", kinds(events), "hardline 每次都问")
+        self.assertEqual(remembered, {}, "hardline 一个字都不许记")
 
     def test_same_dangerous_command_asks_every_time(self):
-        """没有「总是允许」：同一条危险命令下一轮照样问。"""
+        """没接审批记忆时（deps 不注入），同一条危险命令下一轮照样问。"""
         for _ in range(2):
             llm = self._two_round('{"command": "rm -rf ./dist"}')
             deps = guard_deps(llm)

@@ -229,6 +229,16 @@ class _LiveResponse:
 def _exchange(host: str, port: int, sock, request, timeout: float,
               use_tls: bool):
     """在已连接的 socket 上发起请求，返回**活着的**响应对象（不预读）。"""
+    # 连接阶段用的是被 CONNECT_TIMEOUT_CAP 压过的逐地址上限，而那个超时是 set 在
+    # socket 上的 —— 已连接的 socket 又被连接对象直接复用，于是「5 秒」一路带进了
+    # 后面的读写：模型 5 秒没吐出第一个字节就被判成读超时（真机 2026-10-14：
+    # 请求 09:51:26 发出、09:51:31 报 TimeoutError，正好 5 秒；用户报的
+    # 「特别容易超时」就是它，自动重试只是把它盖住了）。这里把超时改回请求自己的
+    # 口径：连接依旧按 cap 封顶，读出网响应等多久由调用方 cfg.timeout_seconds 决定。
+    try:
+        sock.settimeout(float(timeout) or HTTP_TIMEOUT_SECONDS)
+    except Exception:                              # pragma: no cover - 防御
+        pass
     conn = (_PinnedTLSConnection(host, sock, timeout) if use_tls
             else _PinnedPlainConnection(host, port, sock, timeout))
     headers = {k: v for k, v in request.header_items()

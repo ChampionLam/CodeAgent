@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../state/store';
+import { queueHint, shouldQueueForSend } from '../../state/sendQueue';
 import { baseName, fileUrl, getAgent } from '../../state/live';
 import { Icon } from '../Icon';
 import { ComposerControls } from './ComposerControls';
@@ -26,7 +27,8 @@ function pathOf(file: File): string {
 export function Composer() {
   const {
     send, isStreaming, stopStreaming, composerDraft, setComposerDraft,
-    flowsWaiting, answerFlow, dismissFlow, activeSessionId
+    flowsWaiting, answerFlow, dismissFlow, activeSessionId,
+    queuedTurns, enqueueSend, cancelQueuedTurn
   } = useApp();
   const [value, setValue] = useState('');
   const [focused, setFocused] = useState(false);
@@ -124,7 +126,21 @@ export function Composer() {
 
   const submit = () => {
     const text = value.trim();
-    if ((!text && images.length === 0) || isStreaming) return;
+    const onlyDocs = images.length > 0 && images.every(isDocPath);
+    // Image-only turns still need an instruction for the model to act on.
+    // Document attachments carry extracted text, so a generic instruction suffices.
+    const payload = text || (onlyDocs ? '看看这些文档' : '看看这些图片');
+    if (!text && images.length === 0) return;
+    // 忙时（或队列里还有人）不再把这句话丢掉：排进队列，本轮结束自动送出。
+    // 用户是主控、模型只是执行者，长任务期间不该挡着他说话（2026-10-14 用户报
+    // 「模型在做长任务的时候,我不能继续发消息」）。
+    if (shouldQueueForSend(isStreaming, queuedTurns.length)) {
+      enqueueSend(payload, images.length ? images : undefined, activeSessionId);
+      setValue('');
+      setImages([]);
+      requestAnimationFrame(() => taRef.current?.focus());
+      return;
+    }
     // 项目会话的流程正等着回答：这句话先交给流程判断（它落了库、也认得选项），
     // 而不是直接发给模型。用户**没按剧本走**时流程当场收尾（off_script），
     // 这时才把原话按普通消息发出去 —— 不把人卡在流程里（2026-10-09 用户口径）。
@@ -141,8 +157,7 @@ export function Composer() {
     }
     // Image-only turns still need an instruction for the model to act on.
     // Document attachments carry extracted text, so a generic instruction suffices.
-    const onlyDocs = images.length > 0 && images.every(isDocPath);
-    send(text || (onlyDocs ? '看看这些文档' : '看看这些图片'), images.length ? images : undefined);
+    send(payload, images.length ? images : undefined);
     setValue('');
     setImages([]);
     requestAnimationFrame(() => taRef.current?.focus());
@@ -178,7 +193,7 @@ export function Composer() {
     if (withPath.length) addFiles(withPath);
   };
 
-  const canSend = (value.trim().length > 0 || images.length > 0) && !isStreaming;
+  const canSend = (value.trim().length > 0 || images.length > 0);
 
   return (
     <div className="composer">
@@ -219,6 +234,25 @@ export function Composer() {
             </div>
           )}
 
+          {queuedTurns.length > 0 && (
+            <div className="composer__queue">
+              <span className="composer__queue-hint">{queueHint(queuedTurns.length)}</span>
+              {queuedTurns.map(t => (
+                <span key={t.id} className="composer__queue-item" title={t.text}>
+                  <span className="composer__queue-text">{t.text.slice(0, 40)}</span>
+                  <button
+                    className="composer__queue-x"
+                    title="撤销排队"
+                    aria-label="撤销排队"
+                    onClick={() => cancelQueuedTurn(t.id)}
+                  >
+                    <Icon.X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <textarea
             ref={taRef}
             className="composer__input"
@@ -228,7 +262,7 @@ export function Composer() {
             onPaste={onPaste}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder={isStreaming ? 'Agent 正在执行…' : '向 Agent 发送消息…'}
+            placeholder={isStreaming ? 'Agent 正在执行（可继续输入，回车排队）…' : '向 Agent 发送消息…'}
             rows={1}
             aria-label="消息输入框"
           />
@@ -274,21 +308,21 @@ export function Composer() {
             ) : null}
 
             <div className="composer__actions">
-              {isStreaming ? (
+              {/* 忙时「停止」和「发送」并存：停止只停当前这轮，排队的话照样按顺序送出。 */}
+              {isStreaming && (
                 <button className="composer__stop" onClick={stopStreaming} title="停止生成" aria-label="停止生成">
                   <Icon.Stop size={14} />
                 </button>
-              ) : (
-                <button
-                  className="composer__send"
-                  onClick={submit}
-                  disabled={!canSend}
-                  title="发送"
-                  aria-label="发送"
-                >
-                  <Icon.Send size={15} />
-                </button>
               )}
+              <button
+                className="composer__send"
+                onClick={submit}
+                disabled={!canSend}
+                title={isStreaming ? '排队发送（本轮结束后自动发出）' : '发送'}
+                aria-label="发送"
+              >
+                <Icon.Send size={15} />
+              </button>
             </div>
           </div>
         </div>
