@@ -146,7 +146,22 @@ async function send() {
   $("ansText").textContent = "";
   showAnswer(true);
   render();
-  const res = await window.hub.ask(text, state.images.slice());
+  let res = null;
+  try {
+    res = await window.hub.ask(text, state.images.slice());
+  } catch (e) {
+    // 提问这一步就可能失败（侧车没起来 / 模型没配 / 网络超时）。以前这里没有
+    // try/catch：一旦抛错，state.streaming 永远停在 true，之后每次回车都被开头
+    // 那句守卫吃掉 —— 整个 hub 从此发不出消息（2026-10-14 用户报「无法发送消息」）。
+    state.streaming = false;
+    if (!$("ansText").textContent) {
+      $("ansText").textContent = "发送失败：" + ((e && e.message) || String(e || "未知错误"));
+    }
+    state.text = text;                 // 别把用户打的字弄丢
+    if ($("inp")) $("inp").value = text;
+    render();
+    return;
+  }
   state.chatId = (res && res.chatId) || "";
   if (res && res.model) { state.model = res.model; $("model").textContent = res.model; }
   state.images = [];
@@ -204,7 +219,13 @@ document.addEventListener("paste", (e) => {
 
 window.hub.onEvent((payload) => {
   const p = payload || {};
-  if (!state.chatId || p.chatId !== state.chatId) return;
+  if (!p.chatId) return;
+  // 竞态：首个事件可能比 hub:ask 的 ack 先到，那会儿 state.chatId 还是空的 ——
+  // 以前直接 return 把这些事件全丢了，最后 chat.done 也收不到，streaming 永远为真。
+  if (!state.chatId) {
+    if (!state.streaming) return;
+    state.chatId = String(p.chatId);
+  } else if (p.chatId !== state.chatId) return;
   const ev = p.event, d = p.data || {};
   if (ev === "chat.delta" && typeof d.text === "string") appendDelta(d.text);
   else if (ev === "chat.done" || ev === "chat.error") {
@@ -214,7 +235,13 @@ window.hub.onEvent((payload) => {
   }
 });
 window.hub.onSnip((file) => { if (file && !state.images.includes(file)) { state.images.push(file); render(); } });
-window.hub.onShown(() => { $("inp").focus(); });
+window.hub.onShown(() => {
+  // 上次提问卡在半路（没拿到 chatId 就断了）时，重新唤起就把它解掉，别让守卫
+  // 一直挡着发送。
+  if (state.streaming && !state.chatId) state.streaming = false;
+  render();
+  $("inp").focus();
+});
 (async () => { const t = await window.hub.theme(); document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark"); render(); })();
 </script>
 </body></html>

@@ -31,6 +31,11 @@ DecisionBert int8（子进程跑，见 guard_model.py），给校准后**弹卡�
   0.35 <= p < 0.85 → 弹卡（模型没把握，安全优先，照常弹卡）
   p < 0.35         → 放行 + 记入未知池（回流用）
 
+2026-10-14 用户口径（改）：**默认上面这套不成立** —— 模型层不当闸门，只记录 p。
+弹卡与否完全由前面两层正则决定。用户实测：读文档 + 画图跑的一串普通命令被模型层
+判成「35% 可疑」条条弹卡（十几张卡还是出不了图），而正则那两层本来很克制。
+只有 config.json 里 guard.modelGate=true（或 DESK_GUARD_MODEL_GATE=1）才恢复旧行为。
+
 两个参数可配：0.35 是默认弹卡门槛、0.85 是高置信标注线，从 config.json
 的 guard 段读（可覆盖），默认用上面两个数。
 **模型层给的是提示，不是硬闸门，最终决定权在人手里**：它不推翻正则层
@@ -61,14 +66,23 @@ def _log_internal(msg: str) -> None:
     except Exception:
         pass
 
-# 命令位：行首、命令分隔符之后、子 shell 内、sudo/env/exec 之类包装器之后。
-_CMDPOS = r"(?:^|[;&|]|\|\||&&|\$\(|`|\bsudo\s+|\benv\s+|\bexec\s+|\(\s*)\s*"
+# 命令位：行首、**换行**、命令分隔符之后、子 shell 内、sudo/env/exec 之类包装器之后。
+# （2026-10-14 补换行：多行脚本里第二行往后的命令以前不在命令位，`Get-Content a.md`
+#  换行接 `del x` 会被整条放过。）
+_CMDPOS = r"(?:^|[;&|\n]|\|\||&&|\$\(|`|\bsudo\s+|\benv\s+|\bexec\s+|\(\s*)\s*"
 
 # 递归删除的保护目标：删了没有恢复路径。
 _SYSTEM_DIRS = (
     r"/home|/home/\*|/root|/root/\*|/etc|/etc/\*|/usr|/usr/\*|"
     r"/var|/var/\*|/bin|/bin/\*|/sbin|/sbin/\*|/boot|/boot/\*|/lib|/lib/\*"
 )
+
+#: 绝对路径（盘符开头，或 / 开头；排除 /f /s /q 这种单字母开关）——删文件类只对
+#: 绝对目标弹卡，代理在自己工作区里清相对路径（`rm build/tmp.txt`）不算危险操作。
+#: 注意别写成 `(?:^|\s)/…`：嵌进大正则里那个 `^` 锚字符串开头、`\s` 又常被前面的
+#: `\s+` 吃掉，结果整条不命中（2026-10-14 踩过）。
+_ABS_PATH = (r"[A-Za-z]:[\\/][^\s\"';|]*"
+             r"|(?:^|[\s\"'=(,])/(?![A-Za-z](\s|$))[^\s\"';|]+")
 
 
 def _rm_path(path_alt: str, tail: str = r"(?:\s|$|[)`;|&])") -> str:
@@ -115,6 +129,29 @@ DANGEROUS_PATTERNS: list[tuple[str, str]] = [
     (_CMDPOS + r"rm\s+(-[^\s]*\s+)*-[a-z]*r", "递归删除"),
     (_CMDPOS + r"(?:del|erase)\b[^\n]*(?:/s|/q)", "递归删除（del）"),
     (_CMDPOS + r"(rd|rmdir)\s+/s\b", "递归删除目录（rd /s）"),
+    # 2026-10-14 补（用户口径：正则该拦的拦、读类永不弹）。以前这几类只在 /s|/q 形态
+    # 下才命中，普通的删文件 / 删目录 / 动注册表 / 改权限都在盲区 —— 真机实测
+    # `del D:\...\a.txt` 直接跑掉不弹卡。
+    # 删文件类**只拦绝对路径**（盘符 / 或 / 开头）：代理在自己工作区里清构建产物
+    # （`rm build/tmp.txt`、`Remove-Item .\build\out.txt`）属于正常干活，不该打断；
+    # 动工作区之外的东西才点头。档位 dangerous（可按 动词+目标目录 记忆）。
+    (_CMDPOS + r"(?:del|erase)\b[^\n]*(?:" + _ABS_PATH + r")", "删除文件（del）"),
+    (_CMDPOS + r"(?:rd|rmdir)\b[^\n]*(?:" + _ABS_PATH + r")", "删除目录（rd/rmdir）"),
+    (_CMDPOS + r"rm\b[^\n]*(?:" + _ABS_PATH + r")", "删除文件（rm）"),
+    (_CMDPOS + r"(?:remove-item|ri)\b[^\n]*(?:" + _ABS_PATH + r")",
+     "删除文件/目录（Remove-Item）"),
+    (_CMDPOS + r"(?:unlink|shred)\b[^\n]*(?:" + _ABS_PATH + r")", "删除/清空文件（unlink）"),
+    # 注册表 / 权限 / 服务 / 计划任务 / 防火墙：没有「工作区内」这种说法，无条件拦
+    (_CMDPOS + r"reg\b[^\n]*(add|import)\b", "写注册表（reg add）"),
+    (_CMDPOS + r"(?:new-itemproperty|set-itemproperty)\b", "改注册表值（Set-ItemProperty）"),
+    (_CMDPOS + r"takeown\b", "夺取文件所有权（takeown）"),
+    (_CMDPOS + r"set-executionpolicy\b", "改 PowerShell 执行策略"),
+    (_CMDPOS + r"(?:schtasks|at)\b[^\n]*(/create|/delete|-create)",
+     "改计划任务（schtasks）"),
+    (_CMDPOS + r"netsh\b[^\n]*(firewall|advfirewall)[^\n]*(add|set|delete)",
+     "改防火墙规则（netsh）"),
+    (_CMDPOS + r"(?:rclone|aws|az|gsutil|gcloud)\b[^\n]*(delete|rm|remove)\b",
+     "删除云端数据（云 CLI）"),
     (_CMDPOS + r"taskkill\b[^\n]*/f", "强制结束进程（taskkill /F）"),
     (_CMDPOS + r"stop-process\b[^\n]*-force", "强制结束进程（Stop-Process -Force）"),
     (_CMDPOS + r"killall\b[^\n]*(-9|-kill|-s\s+kill)", "强制结束进程（killall）"),
@@ -380,22 +417,32 @@ def judge_command_layered(command: str, *, model=None,
 
     p = float(out.get("p", 0.0))
     action = _model_action(p, thresholds)
+    # 2026-10-14 用户口径：模型层默认**只观察、不当闸门**。真正该拦的是上面两层
+    # 正则；模型说「可疑」但没有正则命中时，弹卡只会变成噪音（读文档跑的一串
+    # 普通命令条条弹卡，用户实测十几张卡还出不了图）。guard.modelGate=true 才恢复成硬闸。
+    gate = model_gate_enabled()
     if action == "block_confident":
         # t_87ce5f71：面向用户的文案不许带内部术语（弹卡/校准/p=…/阈值），
         # 数值细节只进内部日志（日志里叫弹卡没问题）。
         _log_internal(
-            "模型提示层：校准弹卡概率 p=%.3f ≥ %.2f（高置信危险），已拦截待确认"
-            % (p, thresholds["confident"]))
-        return Verdict(True, "dangerous", "model-block",
-                       "检测到可疑命令执行（危险等级：高）。这条命令可能改动"
-                       "系统文件或从网络下载内容，确认后才会执行")
+            "模型提示层：校准弹卡概率 p=%.3f ≥ %.2f（高置信危险）%s"
+            % (p, thresholds["confident"],
+               "，已拦截待确认" if gate else "，仅记录（模型层非闸门，不弹卡）"))
+        if gate:
+            return Verdict(True, "dangerous", "model-block",
+                           "检测到可疑命令执行（危险等级：高）。这条命令可能改动"
+                           "系统文件或从网络下载内容，确认后才会执行")
+        return Verdict(False, "", "model-observe", "")
     if action == "block":
         _log_internal(
-            "模型提示层：校准弹卡概率 p=%.3f 落在不确定带（%.2f–%.2f），"
-            "安全优先，已拦截待确认" % (p, thresholds["ask"], thresholds["confident"]))
-        return Verdict(True, "dangerous", "model-block",
-                       "检测到可疑命令执行（危险等级：中）。无法完全排除"
-                       "风险，确认后才会执行")
+            "模型提示层：校准弹卡概率 p=%.3f 落在不确定带（%.2f–%.2f）%s"
+            % (p, thresholds["ask"], thresholds["confident"],
+               "，安全优先，已拦截待确认" if gate else "，仅记录（模型层非闸门，不弹卡）"))
+        if gate:
+            return Verdict(True, "dangerous", "model-block",
+                           "检测到可疑命令执行（危险等级：中）。无法完全排除"
+                           "风险，确认后才会执行")
+        return Verdict(False, "", "model-observe", "")
     return Verdict(False, "", "",
                    "模型校准弹卡概率 p=%.3f < %.2f（放行，记入未知池回流）"
                    % (p, thresholds["ask"]))
@@ -443,6 +490,44 @@ def model_layer_enabled() -> bool:
     except Exception:
         pass
     return True
+
+
+def model_gate_enabled() -> bool:
+    """模型层能不能**单独**拦命令（2026-10-14 用户钦定口径：默认 **不能**）。
+
+    config.json 的 guard 段 ``modelGate``（兼容 ``model_gate``），环境变量
+    ``DESK_GUARD_MODEL_GATE`` 覆盖（0/1、true/false、on/off、yes/no）。
+
+    默认 **False**：模型层只做观察与回流，弹不弹卡完全由两层正则决定。
+    置 true 才恢复旧行为（p ≥ ask 即拦）—— 留给需要更严策略的部署。
+    """
+    env = os.environ.get("DESK_GUARD_MODEL_GATE", "").strip().lower()
+    if env:
+        return env not in ("0", "false", "off", "no")
+    try:
+        import appconfig
+        cfg = None
+        if hasattr(appconfig, "capability"):
+            cfg = appconfig.capability("guard", None)
+        if cfg is None and hasattr(appconfig, "section"):
+            for key in ("guard", "capabilities"):
+                try:
+                    got = appconfig.section(key)
+                except Exception:
+                    got = None
+                if isinstance(got, dict) and "guard" in got and isinstance(got["guard"], dict):
+                    cfg = got["guard"]
+                    break
+                if isinstance(got, dict) and ("modelGate" in got or "model_gate" in got):
+                    cfg = got
+                    break
+        if isinstance(cfg, dict):
+            for key in ("modelGate", "model_gate"):
+                if key in cfg:
+                    return bool(cfg[key])
+    except Exception:
+        pass
+    return False
 
 
 def judge_tool_layered(tool_name: str, args: dict | None) -> Verdict:

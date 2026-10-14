@@ -44,6 +44,12 @@ interface MessageRow {
   createdAt?: number | string;
   created_at?: number | string;
   ordinal?: number;
+  /**
+   * 产出文件（messages.artifacts，2026-09-27 起落库）。
+   * 2026-10-14 真机：后端已经回传，这里没声明就直接被丢掉 → 生图/生视频
+   * 的产物刷新后永远不显示。
+   */
+  artifacts?: unknown;
 }
 
 interface SessionsBridge {
@@ -255,15 +261,21 @@ export class SidecarConversationRepo implements ConversationRepo {
       // 思考单独一列（老行可能还夹在正文里，兜底拆出来），渲染成折叠块。
       const stored = textOf(row?.reasoning);
       const thinking = [split.reason, stored].filter(Boolean).join('\n\n').trim();
+      // 产出文件：后端已经收好（write_file/patch 的产物 + 正文里的 [[file:]]，
+      // 以及生图/生视频的产物），这里必须原样带出去，界面才有附件卡。
+      const artifacts = Array.isArray(row?.artifacts) ? row.artifacts : [];
       // Tool rows and tool-call-only assistant rows exist server-side (the
       // backend records them) but have no bubble of their own in this UI.
-      if (!content && !thinking && !images.length) return;
+      // 例外：只带附件的行要留下 —— 否则「生成完文件但正文为空」这种轮次
+      // 在界面上会连产物一起消失（2026-10-14 真机生视频就是这条形态）。
+      if (!content && !thinking && !images.length && !artifacts.length) return;
       out.push({
         id: String(row?.id ?? `${id}-${i}`),
         role: role as Role,
         content,
         ...(thinking ? { thinking } : {}),
         ...(images.length ? { images } : {}),
+        ...(artifacts.length ? { artifacts: artifacts as Message['artifacts'] } : {}),
         createdAt: toMs(row?.createdAt ?? row?.created_at, now)
       });
     });

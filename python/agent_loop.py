@@ -21,7 +21,15 @@ from typing import Any, Callable, Iterator
 
 import context_mechanism
 
-MAX_LOOP = 20
+MAX_LOOP = 40
+#: 撞上限的收尾（2026-10-14 真机投诉「直接报 Loop limit 超 20 次不出结果」）：
+#: 旧实现撞线只往上下文塞一句告示 + 抛 EVENT_ERROR 就 return，前面几十轮的产出
+#: 全丢，界面上既没回复也没结果。现在先停用工具跑一轮「收尾轮」逼模型汇报进展。
+LOOP_WRAPUP_NUDGE = (
+    "已达到单轮工具调用次数上限。工具现已停用：请不要请求任何工具，"
+    "直接用一段话把目前的进展、已经完成的动作和已知结论汇报给用户，"
+    "并说明还剩什么没做完。")
+LOOP_WRAPUP_NOTE = "\n\n（本轮工具调用已达上限 %d 次，以上为当前进展汇总；要继续请再发一句。）"
 DUPLICATE_TOOL_WINDOW = 5
 #: 同一调用被拒几次才真正终止本轮。真机教训（2026-09-25）：模型读 34 页扫描件
 #: 时想「继续读剩下的页」原样重发 read_file，旧逻辑当场 return 掐死整轮，用户
@@ -579,10 +587,18 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
     net_retry_started = None           # 第一次可重试错误的时间（None = 还没出过错）
     done_call_ids: set = set()         # 已执行完的调用 id（断点用：续跑不重做）
 
-    while rounds < max(1, ctx.max_loop):
+    max_rounds = max(1, ctx.max_loop)
+    wrap_up = False
+    while True:
+        if rounds >= max_rounds:
+            if wrap_up:
+                break                      # 收尾轮也跑完了，落到下面统一收尾
+            wrap_up = True
+            tools_arg = None               # 收尾轮停用工具，逼模型给结论
+            messages.append({"role": "system", "content": LOOP_WRAPUP_NUDGE})
         rounds += 1
         _checkpoint(deps, {"event": "round", "rounds": rounds,
-                           "max_loop": max(1, ctx.max_loop),
+                           "max_loop": max_rounds,
                            "done_calls": sorted(done_call_ids)})
         # Mount point 1 (pre-step, contract 7.4): before every round measure,
         # downgrade for free when possible, L2 only if needed. send_messages
@@ -771,7 +787,8 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                 yield {"type": EVENT_DONE, "finishReason": "cancelled", "usage": usage,
                        "rounds": rounds, "toolCallsRun": tool_calls_run}
                 return
-            rounds = max(0, rounds - 1)      # 退避重试不占轮次预算
+            if not wrap_up:                 # 退避重试不占轮次预算（收尾轮不退）
+                rounds = max(0, rounds - 1)
             continue
 
         if deps.is_cancelled():
@@ -790,6 +807,11 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
             # 走 system 角色：chat_persist 明确不落 system 行，所以这句提醒
             # 进模型上下文但不进会话库（界面上不会冒出一条假消息）。
             body_text = "".join(text_parts)
+            if wrap_up:
+                yield {"type": EVENT_DELTA, "text": LOOP_WRAPUP_NOTE % max_rounds}
+                yield {"type": EVENT_DONE, "finishReason": "loop_limit", "usage": usage,
+                       "rounds": rounds, "toolCallsRun": tool_calls_run}
+                return
             if action_nudges < MAX_ACTION_NUDGES and promises_action(body_text):
                 action_nudges += 1
                 messages.append({"role": "system", "content": ACTION_PROMISE_NUDGE})
@@ -1012,11 +1034,13 @@ def _run_inner(ctx: LoopContext, deps: LoopDeps) -> Iterator[dict]:
                                            if c.get("id") not in done_call_ids]})
             recent[:] = recent[-DUPLICATE_TOOL_WINDOW:]
 
-    # 循环上限
-    messages.append({"role": "assistant",
-                     "content": "已达最大循环次数 %d，停止。" % max(1, ctx.max_loop)})
-    yield {"type": EVENT_ERROR, "code": LOOP_LIMIT,
-           "message": "已达最大循环次数 %d" % max(1, ctx.max_loop)}
+    # 循环上限统一收尾：走到这里说明收尾轮也没能正常收尾（模型连「工具已停用」
+    # 都无视、又发了调用，或者收尾轮被纠偏 continue 掉）。把已经写出来的正文抛给
+    # 用户 + 一句提示，正常 DONE —— 不再只抛 EVENT_ERROR 就走人。
+    _flush_partial(deps, text_parts, rounds)
+    yield {"type": EVENT_DELTA, "text": LOOP_WRAPUP_NOTE % max_rounds}
+    yield {"type": EVENT_DONE, "finishReason": "loop_limit", "usage": None,
+           "rounds": rounds, "toolCallsRun": tool_calls_run}
 
 
 def _append_assistant(messages: list[dict], text: str, tool_calls: list[dict]) -> None:

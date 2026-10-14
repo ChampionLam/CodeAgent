@@ -23,6 +23,10 @@ _MARKER = re.compile(r"\[\[\s*file\s*[:：]\s*([^\]]+?)\s*\]\]")
 
 _WRITE_TOOLS = ("write_file", "patch", "apply_patch")
 
+#: 生成类工具（产物路径在 result 里，不在 arguments 里）
+_GEN_TOOLS = frozenset({"image_generate", "video_generate"})
+_MEDIA_PATH = re.compile(r"[^\s\"'<>()\[\]]+\.(?:png|jpe?g|webp|gif|bmp|mp4|webm|mov|m4v)\b", re.I)
+
 _IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".svg"}
 _CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".cs", ".java", ".go", ".rs",
              ".c", ".h", ".cpp", ".sql", ".sh", ".ps1", ".bat", ".cmd", ".yml", ".yaml",
@@ -92,6 +96,50 @@ def written_paths(tool_events: Iterable[dict]) -> list[str]:
     return out
 
 
+def _result_of(row: dict) -> dict:
+    """工具结果：事件流给 result（dict），表里给 result_json（字符串）。"""
+    res = _field(row, "result", "result_json")
+    if isinstance(res, dict):
+        return res
+    if isinstance(res, str) and res.strip():
+        try:
+            parsed = json.loads(res)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def generated_paths(tool_events: Iterable[dict]) -> list[str]:
+    """生图/生视频的产物路径。
+
+    2026-10-14 真机：image_generate/video_generate 跑成功、文件也落盘了
+    （7.7MB png / 4.5MB mp4），但聊天里什么都没有 —— 因为这里的收集只认
+    write_file/patch 的 arguments.path，生成类工具的路径在 result 里。
+    优先用 result.data.files（结构化），退化到从 result.content 认媒体扩展名。
+    """
+    out: list[str] = []
+    for row in tool_events or []:
+        if not isinstance(row, dict):
+            continue
+        if str(_field(row, "name", "tool_name") or "") not in _GEN_TOOLS:
+            continue
+        if row.get("ok") is False or row.get("errorCode") or row.get("error_json"):
+            continue
+        res = _result_of(row)
+        if res.get("ok") is False:
+            continue
+        data = res.get("data") if isinstance(res.get("data"), dict) else {}
+        found = [str(p).strip() for p in (data.get("files") or []) if str(p).strip()]
+        if not found:
+            # 两种形态都要认：表里的 result_json（result.content）和事件流捕获的
+            # 扁平行（row["content"]）——线上走的是后者。
+            text = str(res.get("content") or row.get("content") or "")
+            found = [m.group(0) for m in _MEDIA_PATH.finditer(text)]
+        out.extend(found)
+    return out
+
+
 def _resolve(path: str, workspace_root: str | None) -> str:
     if os.path.isabs(path) or not workspace_root:
         return path
@@ -106,7 +154,8 @@ def collect(tool_events: Iterable[dict], text: str, *,
     顺序：先「显式标记」（用户明确要的），再「本轮写盘」（顺带产物）；
     路径按大小写不敏感去重（Windows）。
     """
-    candidates = marker_paths(text) + written_paths(tool_events)
+    candidates = (marker_paths(text) + written_paths(tool_events)
+                  + generated_paths(tool_events))
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for raw in candidates:

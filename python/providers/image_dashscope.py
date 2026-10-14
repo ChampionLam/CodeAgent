@@ -60,9 +60,16 @@ class DashscopeImageProvider(GenProvider):
 
     # ---- 内部 --------------------------------------------------------------
 
-    def _workspace(self) -> str:
-        base = (self.base_url or os.environ.get("DASHSCOPE_BASE_URL", "").strip()
+    def _base(self) -> str:
+        """生图端点基准。优先 DASHSCOPE_IMAGE_BASE_URL（专用于生图），
+        避免和大模型网关用的 DASHSCOPE_BASE_URL 互相踩。"""
+        return (self.base_url
+                or os.environ.get("DASHSCOPE_IMAGE_BASE_URL", "").strip()
+                or os.environ.get("DASHSCOPE_BASE_URL", "").strip()
                 or DEFAULT_BASE_URL)
+
+    def _workspace(self) -> str:
+        base = self._base()
         m = _WORKSPACE_RE.match(base.strip())
         if not m:
             raise GenError("NOT_CONFIGURED",
@@ -70,7 +77,17 @@ class DashscopeImageProvider(GenProvider):
         return m.group(1)
 
     def _endpoint(self) -> str:
-        return "https://%s.cn-beijing.maas.aliyuncs.com%s" % (self._workspace(), _ENDPOINT_PATH)
+        base = self._base().strip()
+        ws = self._workspace()
+        # 公共端点（https://dashscope.aliyuncs.com）：直接用它当 API root，
+        # 不要重写成 <workspace>.cn-beijing.maas.aliyuncs.com（那个主机不认公共账号，
+        # 真机实测会回 BadRequest.IllegalEndpoint: Workspace endpoint is invalid）。
+        if ws == "dashscope":
+            root = re.match(r"https?://[^/]+", base)
+            if not root:
+                raise GenError("NOT_CONFIGURED", "无法解析生图端点: %r" % base)
+            return root.group(0) + _ENDPOINT_PATH
+        return "https://%s.cn-beijing.maas.aliyuncs.com%s" % (ws, _ENDPOINT_PATH)
 
     # ---- 生成 --------------------------------------------------------------
 

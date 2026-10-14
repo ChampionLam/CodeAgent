@@ -52,6 +52,11 @@ def _import_builtins():
         out.append(DashscopeImageProvider)
     except Exception:
         pass
+    try:
+        from providers.video_minimax import MiniMaxVideoProvider
+        out.append(MiniMaxVideoProvider)
+    except Exception:
+        pass
     return out
 
 
@@ -241,9 +246,42 @@ class ImageGenerateTool(_GenTool):
         return True
 
 
+class VideoGenerateTool(_GenTool):
+    name = "video_generate"
+    kind = "video"
+    description = (
+        "Generate a short video from a text prompt and save it into the workspace. "
+        "Use this whenever the user asks you to create a video, animation or clip. "
+        "Video generation takes minutes: tell the user it is running before you wait."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "What the video should show, including camera motion and mood.",
+            },
+            "aspect_ratio": {
+                "type": "string",
+                "description": "Output aspect ratio, e.g. 16:9, 9:16, 1:1. Default 16:9.",
+                "enum": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
+            },
+            "model": {
+                "type": "string",
+                "description": "Optional provider model override; omit to use the configured default.",
+            },
+        },
+        "required": ["prompt"],
+    }
+
+    @property
+    def supports_references(self) -> bool:
+        return False
+
+
 def register_defaults() -> None:
     """把所有生成类工具注册进 tools 全局注册表（幂等覆盖）。"""
-    for tool in (ImageGenerateTool(),):
+    for tool in (ImageGenerateTool(), VideoGenerateTool()):
         tools.register(tool)
 
 

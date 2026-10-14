@@ -216,6 +216,7 @@ let snipOverlay: BrowserWindow | null = null;
 let hubWindow: BrowserWindow | null = null;
 let hubSessionId = "";
 let hubModelName = "";
+let hubModelIdCache = "";
 let hubLastChatId = "";
 /** 截图结果回哪个窗：主窗（Ctrl+Shift+S）还是 hub。 */
 let snipTarget: "main" | "hub" = "main";
@@ -530,15 +531,30 @@ async function ensureHubSession(): Promise<string> {
   return hubSessionId || "default";
 }
 
-async function hubModelLabel(): Promise<string> {
-  if (hubModelName) return hubModelName;
+/** 当前该用哪个模型：models.list 的 activeId/defaultId 优先，其次第一条。id 进请求，label 给 hub 显示。 */
+async function hubModelPick(): Promise<{ id: string; name: string }> {
+  if (hubModelIdCache || hubModelName) return { id: hubModelIdCache, name: hubModelName };
   try {
-    const list = (await requireClient().request("models.list", {})) as { models?: Array<Record<string, unknown>> };
-    const rows = list?.models ?? [];
-    const pick = rows.find((m) => m.isDefault === true || m.is_default === true) ?? rows[0];
-    hubModelName = pick ? String(pick.name ?? pick.id ?? "") : "";
-  } catch { hubModelName = ""; }
-  return hubModelName;
+    const list = (await requireClient().request("models.list", {})) as {
+      items?: Array<Record<string, unknown>>;
+      models?: Array<Record<string, unknown>>;
+      activeId?: string;
+      defaultId?: string;
+    };
+    const rows = list?.items ?? list?.models ?? [];
+    const preferred = String(list?.activeId ?? list?.defaultId ?? "");
+    const pick =
+      (preferred ? rows.find((m) => String(m.id ?? "") === preferred) : undefined) ??
+      rows.find((m) => m.isDefault === true || m.is_default === true) ??
+      rows[0];
+    hubModelIdCache = pick ? String(pick.id ?? "") : preferred;
+    hubModelName = pick ? String(pick.label ?? pick.name ?? pick.id ?? "") : preferred;
+  } catch { hubModelIdCache = ""; hubModelName = ""; }
+  return { id: hubModelIdCache, name: hubModelName };
+}
+
+async function hubModelLabel(): Promise<string> {
+  return (await hubModelPick()).name;
 }
 
 function registerHubIpc(): void {
@@ -551,6 +567,10 @@ function registerHubIpc(): void {
     const sessionId = await ensureHubSession();
     const chatId = randomUUID();
     hubLastChatId = chatId;
+    // hub 不走渲染层，模型得自己带上：渲染层每次发消息会带当前模型 id，
+    // hub 不带就落到 config.json 里空白的 model 段 —— 真机 2026-10-14 复现：
+    // 「随手问」发出去收到 CONFIG_ERROR: 尚未配置模型，看着就是发不出消息。
+    const { id: modelId } = await hubModelPick();
     const ack = await requireClient().request("chat", {
       sessionId,
       messages: [{ role: "user", content: text }],
@@ -558,6 +578,9 @@ function registerHubIpc(): void {
       // 挂上来的 xlsx/txt 得靠工具读；光看图看不进表格里的数。
       useTools: true,
       workspaceRoot: defaultWorkspaceRoot(),
+      // 字段名是 modelId（侧车 _resolve_model_override 认这个）：带不上就回落
+      // 到 config.json 的 legacy model 段，新装实例那边是空的。
+      ...(modelId ? { modelId } : {}),
     }, { id: chatId });
     return { ...(ack as Record<string, unknown>), chatId, sessionId, model: await hubModelLabel() };
   });

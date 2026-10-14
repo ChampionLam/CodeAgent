@@ -165,23 +165,70 @@ class ProcessManagerTests(unittest.TestCase):
 
 
 class ModelVerdictTests(unittest.TestCase):
-    """p → action 三档 + 阈值可配置。
+    """模型层的角色（2026-10-14 用户口径改）：**默认只观察，不当闸门**。
 
-    极性（2026-10-01 核定）：p 是弹卡概率，高 p = 危险。
-    p >= 0.85 → 弹卡（高置信）、p >= 0.35 → 弹卡、p < 0.35 → 放行。
+    旧口径（p >= 0.85 高置信弹卡 / 0.35 <= p < 0.85 没把握也弹卡）今天被推翻：
+    用户实测「读文档 + 画图」跑的一串普通命令被模型层条条判成可疑，十几张卡
+    还出不了图。现在弹不弹卡完全由两层正则决定，模型层只记录 p（未知池回流仍在）。
+    config.json 的 guard.modelGate=true / DESK_GUARD_MODEL_GATE=1 才恢复旧行为 ——
+    下面把老口径也钉住，免得开关哪天失灵没人发现。
     """
 
-    def _judge(self, command, p, thresholds=None):
+    def _judge(self, command, p, thresholds=None, gate=False):
+        import os
+
         class FakeModel:
             def predict(self, command, **kw):
                 return {"p": p, "level": 1, "cost": 1}
 
-        return guard.judge_command_layered(
-            command, model=FakeModel(), thresholds=thresholds or
-            {"confident": 0.85, "ask": 0.35})
+        old = os.environ.get("DESK_GUARD_MODEL_GATE")
+        os.environ["DESK_GUARD_MODEL_GATE"] = "1" if gate else "0"
+        try:
+            return guard.judge_command_layered(
+                command, model=FakeModel(), thresholds=thresholds or
+                {"confident": 0.85, "ask": 0.35})
+        finally:
+            if old is None:
+                os.environ.pop("DESK_GUARD_MODEL_GATE", None)
+            else:
+                os.environ["DESK_GUARD_MODEL_GATE"] = old
 
-    def test_high_p_blocks_confidently(self):
-        v = self._judge("find . -delete", p=0.97)
+    # -- 默认口径：只观察，不弹卡 -------------------------------------------
+
+    def test_model_never_gates_by_default(self):
+        """模型说危险也不算数 —— 这正是用户报的噪音源。"""
+        for p in (0.97, 0.85, 0.5, 0.351):
+            v = self._judge("Get-Content 报告.md", p=p)
+            self.assertFalse(v.requires_approval, "p=%s 不该弹卡" % p)
+            self.assertEqual(v.tier, "")
+            self.assertEqual(v.pattern, "model-observe")
+
+    def test_observe_verdict_has_no_user_facing_internals(self):
+        """t_87ce5f71：面向用户的话里不许有 p=/阈值/弹卡这类内部术语。"""
+        v = self._judge("Get-Content 报告.md", p=0.97)
+        self.assertEqual(v.reason, "")
+
+    def test_gate_defaults_to_off(self):
+        import os
+        old = os.environ.get("DESK_GUARD_MODEL_GATE")
+        os.environ["DESK_GUARD_MODEL_GATE"] = "0"
+        try:
+            self.assertFalse(guard.model_gate_enabled())
+        finally:
+            if old is None:
+                os.environ.pop("DESK_GUARD_MODEL_GATE", None)
+            else:
+                os.environ["DESK_GUARD_MODEL_GATE"] = old
+
+    def test_low_p_allows_with_unknown_pool(self):
+        v = self._judge("ls -la", p=0.10)
+        self.assertFalse(v.requires_approval)
+        self.assertIn("未知池", v.reason)
+
+    # -- 老口径：只有显式开闸才成立（回归保护）-------------------------------
+
+    def test_gate_on_restores_high_p_block(self):
+        v = self._judge("find . -delete", p=0.97, gate=True)
         self.assertTrue(v.requires_approval)
         self.assertEqual(v.tier, "dangerous")
         # t_87ce5f71：面向用户的 reason 不再含 p=…/高置信 等内部术语
@@ -190,8 +237,8 @@ class ModelVerdictTests(unittest.TestCase):
                      "高置信", "很确定", "不确定带", "建议"):
             self.assertNotIn(term, v.reason)
 
-    def test_mid_p_blocks(self):
-        v = self._judge("git commit -m \"docs: 修 rm -rf 说明\"", p=0.5)
+    def test_gate_on_restores_mid_p_block(self):
+        v = self._judge("git commit -m \"docs: 修 rm -rf 说明\"", p=0.5, gate=True)
         self.assertTrue(v.requires_approval)
         self.assertEqual(v.tier, "dangerous")
         self.assertIn("危险等级：中", v.reason)
@@ -199,25 +246,21 @@ class ModelVerdictTests(unittest.TestCase):
                      "高置信", "很确定", "不确定带", "建议"):
             self.assertNotIn(term, v.reason)
 
-    def test_low_p_allows_with_unknown_pool(self):
-        v = self._judge("ls -la", p=0.10)
+    def test_gate_on_boundaries(self):
+        self.assertTrue(self._judge("x", p=0.90, gate=True).requires_approval)
+        self.assertTrue(self._judge("x", p=0.85, gate=True).requires_approval)
+        self.assertTrue(self._judge("x", p=0.849, gate=True).requires_approval)
+        self.assertTrue(self._judge("x", p=0.35, gate=True).requires_approval)
+        v = self._judge("x", p=0.349, gate=True)
         self.assertFalse(v.requires_approval)
         self.assertIn("未知池", v.reason)
 
-    def test_boundaries(self):
-        self.assertTrue(self._judge("x", p=0.90).requires_approval)
-        self.assertTrue(self._judge("x", p=0.85).requires_approval)
-        self.assertTrue(self._judge("x", p=0.849).requires_approval)
-        self.assertTrue(self._judge("x", p=0.35).requires_approval)
-        v = self._judge("x", p=0.349)
-        self.assertFalse(v.requires_approval)
-
-    def test_thresholds_configurable(self):
-        v = self._judge("x", p=0.5,
-                        thresholds={"confident": 0.40, "ask": 0.10})
+    def test_gate_on_thresholds_configurable(self):
+        v = self._judge("x", p=0.5, thresholds={"confident": 0.40, "ask": 0.10},
+                        gate=True)
         self.assertTrue(v.requires_approval, "0.5 >= 0.40 → 弹卡（高置信）")
-        v = self._judge("x", p=0.05,
-                        thresholds={"confident": 0.40, "ask": 0.10})
+        v = self._judge("x", p=0.05, thresholds={"confident": 0.40, "ask": 0.10},
+                        gate=True)
         self.assertFalse(v.requires_approval)
         self.assertIn("未知池", v.reason)
 

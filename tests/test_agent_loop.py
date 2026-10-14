@@ -293,18 +293,55 @@ class ToolRoundTest(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "chat.error")
         self.assertEqual(events[-1]["code"], "DUPLICATE_TOOL")
 
-    def test_loop_limit(self):
+    def test_loop_limit_wraps_up_with_summary(self):
+        """撞上限不再直接报错走人（2026-10-14 投诉）：停用工具跑一轮收尾，汇总进展。"""
+        # 假 LLM 按调用序号取剧本：前 3 次发工具调用，第 4 次（收尾轮）给正文
         scripts = [tool_script("read_file", '{"path":"f%d.txt"}' % i, "c%d" % i)
-                   for i in range(10)]
+                   for i in range(3)]
+        scripts.append(text_script("已读完 3 个文件，结论是 X；还剩对比表没做完。"))
         llm = scripted_llm(scripts)
         deps = make_deps(llm)
         ctx = LoopContext(messages=[{"role": "user", "content": "x"}], workspace_root="/ws",
                           max_loop=3)
         events = list(run(ctx, deps=deps))
-        self.assertEqual(events[-1]["type"], "chat.error")
-        self.assertEqual(events[-1]["code"], "LOOP_LIMIT")
-        self.assertEqual(len(llm.calls), 3)
-        self.assertIn("最大循环次数", ctx.messages[-1]["content"])
+        done = events[-1]
+        self.assertEqual(done["type"], "chat.done")
+        self.assertEqual(done["finishReason"], "loop_limit")
+        self.assertEqual(len(llm.calls), 4)                         # 3 轮工具 + 1 轮收尾
+        self.assertIsNone(llm.calls[-1]["kwargs"].get("tools"))      # 收尾轮停了工具
+        nudge = llm.calls[-1]["messages"][-1]
+        self.assertEqual(nudge["role"], "system")
+        self.assertIn("工具现已停用", nudge["content"])
+        text = "".join(e["text"] for e in events if e["type"] == "chat.delta")
+        self.assertIn("结论是 X", text)                              # 收尾轮正文照常给用户
+        self.assertIn("已达上限 3 次", text)                         # 并且明说撞了上限
+
+    def test_loop_limit_falls_back_to_partial_when_model_ignores_wrapup(self):
+        """收尾轮无视「工具已停用」又发调用：兜底抛 partial + DONE，不再纯报错。"""
+        scripts = [tool_script("read_file", '{"path":"f%d.txt"}' % i, "c%d" % i)
+                   for i in range(10)]
+        scripts.append(tool_script("read_file", '{"path":"ignored.txt"}', "cw"))
+        llm = scripted_llm(scripts)
+        deps = make_deps(llm)
+        ctx = LoopContext(messages=[{"role": "user", "content": "x"}], workspace_root="/ws",
+                          max_loop=2)
+        events = list(run(ctx, deps=deps))
+        self.assertEqual(events[-1]["type"], "chat.done")
+        self.assertEqual(events[-1]["finishReason"], "loop_limit")
+        self.assertNotIn("chat.error", kinds(events))
+
+    def test_task_longer_than_old_cap_still_finishes(self):
+        """旧口径 20 轮就砍死；现在 25 轮的正常长活能自己收尾。"""
+        scripts = [tool_script("read_file", '{"path":"f%d.txt"}' % i, "c%d" % i)
+                   for i in range(25)]
+        scripts.append(text_script("做完了。"))
+        llm = scripted_llm(scripts)
+        deps = make_deps(llm)
+        ctx = LoopContext(messages=[{"role": "user", "content": "x"}], workspace_root="/ws")
+        events = list(run(ctx, deps=deps))
+        self.assertEqual(events[-1]["type"], "chat.done")
+        self.assertEqual(events[-1]["finishReason"], "stop")
+        self.assertEqual(len(llm.calls), 26)
 
     def test_tool_output_truncated(self):
         llm = self._two_round_llm()

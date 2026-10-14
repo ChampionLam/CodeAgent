@@ -199,7 +199,7 @@ class MiniMaxVideoProvider(GenProvider):
                 return fail(CANCELLED,
                             "视频生成已被取消（task_id=%s，已提交任务不再管）" % task_id)
             status, body = self._get_json(self.query_url + "?task_id=" + task_id,
-                                          api_key=None, timeout=120)
+                                          api_key=self._require_key(), timeout=120)
             if status == 200 and isinstance(body, dict):
                 self._check_base_resp(body)
                 data = body.get("data") if isinstance(body.get("data"), dict) else {}

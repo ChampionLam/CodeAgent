@@ -94,3 +94,55 @@ class CollectTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class GeneratedMediaTest(unittest.TestCase):
+    """生图/生视频的产物必须进附件列表（2026-10-14 真机：文件真生成了，聊天里却看不见）。"""
+
+    def test_image_result_files_are_collected(self):
+        rows = [{"id": "1", "name": "image_generate", "ok": True,
+                 "arguments": {"prompt": "cat"},
+                 "result": {"ok": True,
+                            "content": "image_generate: 已生成 1 个文件\nD:/ws/generated/gen_1.png",
+                            "data": {"files": ["D:/ws/generated/gen_1.png"]}}}]
+        self.assertEqual(artifacts.generated_paths(rows), ["D:/ws/generated/gen_1.png"])
+
+    def test_failed_gen_is_skipped(self):
+        rows = [{"id": "1", "name": "video_generate", "ok": False,
+                 "result": {"ok": False, "content": "video_generate: 失败 AUTH"}}]
+        self.assertEqual(artifacts.generated_paths(rows), [])
+        rows2 = [{"id": "2", "name": "image_generate", "ok": True,
+                  "result": {"ok": False, "content": "image_generate: AUTH"}}]
+        self.assertEqual(artifacts.generated_paths(rows2), [])
+
+    def test_table_naming_and_content_fallback_recognize_media_ext(self):
+        rows = [{"id": "1", "tool_name": "video_generate", "ok": True,
+                 "result_json": json.dumps({"ok": True, "content":
+                    "video_generate: 已生成 1 个文件\nD:\\ws\\gen\\gen_9.mp4"})}]
+        self.assertEqual(artifacts.generated_paths(rows), ["D:\\ws\\gen\\gen_9.mp4"])
+
+    def test_collect_includes_generated_media(self):
+        d = tempfile.mkdtemp()
+        png = os.path.join(d, "gen_x.png")
+        with open(png, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+        rows = [{"id": "1", "name": "image_generate", "ok": True,
+                 "result": {"ok": True, "content": "image_generate: 已生成 1 个文件",
+                            "data": {"files": [png]}}}]
+        got = artifacts.collect(rows, "图好了", workspace_root=d)
+        self.assertEqual([a["path"] for a in got], [png])
+        self.assertEqual(got[0]["kind"], "image")
+
+    def test_live_captured_row_shape_is_supported(self):
+        """事件流捕获的行是扁平的：只有 name/ok/content，没有 result 包装。
+
+        2026-10-14 真机：后端改了但聊天里还是不显示 —— 因为线上走的是这条
+        chat_persist.merge_tool_event 造出来的扁平行，而不是表里的 result_json。
+        """
+        rows = [{"id": "1", "name": "image_generate", "ok": True,
+                 "content": "image_generate: 已生成 1 个文件\nD:/ws/gen/gen_7.png"}]
+        self.assertEqual(artifacts.generated_paths(rows), ["D:/ws/gen/gen_7.png"])
+
+    def test_live_captured_video_row_is_supported(self):
+        rows = [{"id": "2", "name": "video_generate", "ok": True,
+                 "content": "video_generate: 已生成 1 个文件\nD:/ws/gen/gen_9.mp4\nmodel: MiniMax-Hailuo"}]
+        self.assertEqual(artifacts.generated_paths(rows), ["D:/ws/gen/gen_9.mp4"])

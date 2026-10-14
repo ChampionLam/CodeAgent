@@ -893,3 +893,93 @@ class ImageFormatSniffTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+# ===========================================================================
+# 真机 bug 回归：鉴权必须出现在每一个请求上（2026-10-14 靶机实测抓到）
+#   现象1：生视频提交成功拿到 task_id，轮询漏 Authorization → MiniMax 1004 → 工具报失败，
+#          而视频其实已在服务端渲染（用户看到的就是「生视频用不了」）。
+#   现象2：生图端点被硬拼成 <第一段>.cn-beijing.maas.aliyuncs.com，
+#          公共端点 https://dashscope.aliyuncs.com 走不通 → BadRequest.IllegalEndpoint。
+# ===========================================================================
+
+class TestGenAuthOnEveryRequest(GenTestCase):
+
+    SUBMIT = TestMiniMaxVideo.SUBMIT
+    QUERY = TestMiniMaxVideo.QUERY
+    RETRIEVE = TestMiniMaxVideo.RETRIEVE
+
+    def test_video_poll_and_retrieve_must_carry_authorization(self):
+        opener = FakeOpener({
+            self.SUBMIT: [(200, {"base_resp": {"status_code": 0, "status_msg": ""},
+                                 "task_id": "t1"})],
+            self.QUERY: [(200, {"base_resp": {"status_code": 0, "status_msg": ""},
+                                "task_id": "t1", "status": "Success", "file_id": "f1"})],
+            self.RETRIEVE: [(200, {"base_resp": {"status_code": 0, "status_msg": ""},
+                                   "file": {"file_id": "f1",
+                                            "download_url": "https://mm.example.com/v.mp4"}})],
+            "https://mm.example.com/v.mp4": [(200, b"\x00\x00\x00\x18ftypmp42body")],
+        })
+        prov = MiniMaxVideoProvider(api_key="k-mm", opener=opener,
+                                    sleep=lambda s: None, poll_interval_s=0)
+        res = prov.generate(prompt="p", model=None, out_dir=self.tmp)
+        self.assertTrue(res.ok, res.error_message)
+        for prefix in (self.SUBMIT, self.QUERY, self.RETRIEVE):
+            calls = opener.calls_to(prefix)
+            self.assertTrue(calls, "没有发出 %s 请求" % prefix)
+            for call in calls:
+                self.assertEqual(call["headers"].get("Authorization"), "Bearer k-mm",
+                                 "%s 的请求漏了 Authorization（MiniMax 会回 1004）" % prefix)
+        # 下载走 OSS 签名地址：不能带我们的 key（避免泄露）
+        for call in opener.calls_to("https://mm.example.com/v.mp4"):
+            self.assertNotIn("Authorization", call["headers"])
+
+
+class TestDashscopeEndpointRouting(GenTestCase):
+
+    PUBLIC = "https://dashscope.aliyuncs.com"
+    PATH = "/api/v1/services/aigc/multimodal-generation/generation"
+
+    def _opener(self, name):
+        return FakeOpener({
+            self.PUBLIC + self.PATH: [(200, _ds_ok_body(image_url="https://oss.example.com/%s.png" % name))],
+            "https://oss.example.com/%s.png" % name: [(200, _PNG_1x1)],
+        })
+
+    def test_public_endpoint_used_verbatim(self):
+        opener = self._opener("pub")
+        prov = DashscopeImageProvider(api_key="k-ds", opener=opener, base_url=self.PUBLIC)
+        res = prov.generate(prompt="p", model=None, out_dir=self.tmp)
+        self.assertTrue(res.ok, res.error_message)
+        self.assertEqual(len(opener.calls_to(self.PUBLIC + self.PATH)), 1)
+
+    def test_image_base_env_wins_over_gateway_base_env(self):
+        opener = self._opener("env")
+        old_img = os.environ.get("DASHSCOPE_IMAGE_BASE_URL")
+        old_base = os.environ.get("DASHSCOPE_BASE_URL")
+        os.environ["DASHSCOPE_IMAGE_BASE_URL"] = self.PUBLIC
+        os.environ["DASHSCOPE_BASE_URL"] = "https://llm-xyz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        try:
+            prov = DashscopeImageProvider(api_key="k-ds", opener=opener)
+            res = prov.generate(prompt="p", model=None, out_dir=self.tmp)
+            self.assertTrue(res.ok, res.error_message)
+        finally:
+            for key, old in (("DASHSCOPE_IMAGE_BASE_URL", old_img),
+                             ("DASHSCOPE_BASE_URL", old_base)):
+                if old is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old
+
+    def test_maas_workspace_host_still_workspace_pattern(self):
+        """回归保护：MaaS workspace 主机仍按 workspace 拼（既有客户没被改坏）。"""
+        opener = FakeOpener({
+            "https://myws.cn-beijing.maas.aliyuncs.com" + self.PATH:
+                [(200, _ds_ok_body(image_url="https://oss.example.com/ws.png"))],
+            "https://oss.example.com/ws.png": [(200, _PNG_1x1)],
+        })
+        prov = DashscopeImageProvider(api_key="k-ds", opener=opener,
+                                      base_url="https://myws.example.com")
+        res = prov.generate(prompt="p", model=None, out_dir=self.tmp)
+        self.assertTrue(res.ok, res.error_message)
+        self.assertEqual(len(opener.calls_to("https://myws.cn-beijing.maas.aliyuncs.com" + self.PATH)), 1)

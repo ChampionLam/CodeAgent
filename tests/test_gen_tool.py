@@ -299,9 +299,77 @@ class KeyResolutionTest(GenToolBase):
     def test_builtin_imports_resolve(self):
         """内置 provider 类必须真能 import（名字写错就是这里红）。"""
         classes = gen_tool._import_builtins()
-        names = sorted(c.name for c in classes)
-        self.assertEqual(names, ["dashscope", "minimax"])
+        got = sorted((c.kind, c.name) for c in classes)
+        self.assertEqual(got, [("image", "dashscope"), ("image", "minimax"),
+                               ("video", "minimax")])
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+class _StubVideoProvider(_StubProvider):
+    name = "stubvideo"
+    kind = "video"
+    api_key_env = "STUB_VIDEO_KEY"
+
+
+class CapabilityCatalogTest(GenToolBase):
+    """喂给模型的「能力清单」里点名的工具，必须真注册过。
+
+    2026-10-14 的坑：video_generate 被写进 prompt_build.CAPABILITY_CATALOG、
+    界面也做了工具卡中文标签，python 侧却压根没实现 → 模型一调就「没有这个工具」。
+    """
+
+    def test_advertised_capability_owns_only_registered_tools(self):
+        """被宣传成「有的能力」的那条，点名的工具必须全注册过。
+
+        2026-10-14 的坑：("生成图片或视频", ("image_generate", "video_generate"))
+        里 video_generate 压根没实现，而 image_generate 在 → 这一行按「有」渲染成
+        「生成图片或视频：image_generate」，模型就以为视频也能生。
+        """
+        import tools_web  # noqa: F401  照 sidecar 的接法先注册 web 工具
+        import prompt_build
+        registered = {t["function"]["name"] for t in tools.schemas()}
+        bad = []
+        for label, owners, _caveat, _absent in prompt_build.CAPABILITY_CATALOG:
+            hit = [n for n in owners if n in registered]
+            if not hit:
+                continue          # 整个能力都没有 → 渲染成「本机没有的能力」，没问题
+            missing = [n for n in owners if n not in registered]
+            if missing:
+                bad.append("%s: %s" % (label, missing))
+        self.assertEqual([], bad, "被宣传成有的能力里含未注册工具：%s" % bad)
+
+
+class VideoGenerateTest(GenToolBase):
+    def _run_video(self, args, provider_name="stubvideo"):
+        seg = {"provider": provider_name}
+        with mock.patch.object(appconfig, "capability",
+                               side_effect=lambda name, default=None, **kw:
+                               seg if name == "video_gen" else default):
+            return tools.execute("video_generate", args, workspace_root=self.ws)
+
+    def test_video_generate_is_registered(self):
+        names = [t["function"]["name"] for t in tools.schemas()]
+        self.assertIn("video_generate", names)
+
+    def test_video_generate_rejects_references(self):
+        """视频侧没有参考图能力，给了就得明确拒。"""
+        gen_registry.register_provider(_StubVideoProvider())
+        r = self._run_video({"prompt": "海边航拍", "references": ["a.png"]})
+        self.assertFalse(r.ok)
+        self.assertEqual("BAD_REQUEST", r.error_code)
+
+    def test_video_generate_uses_video_gen_segment(self):
+        p = _StubVideoProvider()
+        gen_registry.register_provider(p)
+        r = self._run_video({"prompt": "海边航拍，无人机视角"})
+        self.assertTrue(r.ok, r.error_message)
+        self.assertEqual(1, p.calls)
+        self.assertTrue(r.content.startswith("video_generate: 已生成 1 个文件"))
+        self.assertIn(os.path.join(self.ws, "generated"), p.seen["out_dir"])
+
+    def test_video_generate_not_configured(self):
+        r = self._run_video({"prompt": "x"}, provider_name="nobody")
+        self.assertFalse(r.ok)
+        self.assertEqual("NOT_CONFIGURED", r.error_code)

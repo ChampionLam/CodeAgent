@@ -37,6 +37,54 @@ PREVIEW_CHARS = 160
 _SHELL_TOOLS = ("run_shell", "run_command", "shell", "powershell", "cmd")
 _WS_RE = re.compile(r"\s+")
 
+#: 只看不改的命令动词（2026-10-14 用户口径）：允许一次就按动词记住，
+#: 换文件的变体不再重复弹卡。读取类**永远**按动词记。
+_VERB_SCOPED = frozenset({
+    # Unix
+    "cat", "head", "tail", "more", "less", "ls", "dir", "find", "grep", "rg",
+    "wc", "stat", "file", "tree", "pwd", "diff", "cmp", "which", "whereis",
+    "echo", "date", "whoami", "hostname", "uname",
+    # Windows / PowerShell
+    "type", "get-content", "gc", "get-childitem", "gci", "dir", "findstr",
+    "select-string", "sls", "get-item", "gi", "test-path", "measure-object",
+    "compare-object", "where.exe", "where", "get-command", "get-process",
+    "get-service", "get-date", "systeminfo", "ipconfig", "netstat",
+})
+
+#: 命令里的路径（盘符开头，或 ./ ../ / 开头），取「根两段」当记忆范围
+_PATH_RE = re.compile(
+    r"[A-Za-z]:[\\/][^\s\"';|]*"
+    r"|(?:^|\s)(?:\.{1,2}[\\/][^\s\"';|]+|[\\/][^\s\"';|]{2,})")
+
+
+def _target_root(cmd: str) -> str:
+    """命令里第一个路径的「根两段」（动词 + 目标目录 记忆用）。
+
+    2026-10-14 用户口径：「命令稍微变动一点就不算同一条」这条要治，但改数据的
+    命令不能放开成整个动词 —— 折中成「动词 + 目标目录」：
+      `del D:/proj/a.txt` 与 `del D:/proj/b.txt` → 同一条（同目录的变体不再问）
+      `del D:/proj/a.txt` 与 `del C:/Windows/x` → 不同条（换目标仍要点头）
+    取不到路径就返回空串，调用方退回按动词记。
+    """
+    m = _PATH_RE.search(str(cmd or ""))
+    if not m:
+        return ""
+    text = m.group(0).strip().replace("\\", "/").rstrip("/")
+    parts = [x for x in text.split("/") if x]
+    if len(parts) >= 2:
+        return "/".join(parts[:2]).lower()
+    return text.lower()
+
+
+def _verb_of(cmd: str) -> str:
+    """取命令第一个词（动词），小写、去路径前缀与调用运算符。
+
+    只用于「读类命令按动词记忆」这一件事，取不出来就返回空串（退回整条命令）。
+    """
+    text = str(cmd or "").strip()
+    m = re.match(r"(?:&\s*)?(?:[A-Za-z]:)?[\\/]*(?:[^\\/\s]+[\\/])*([A-Za-z0-9_.-]+)", text)
+    return m.group(1).lower() if m else ""
+
 
 def _preview(value: str) -> str:
     text = value if isinstance(value, str) else str(value or "")
@@ -58,7 +106,16 @@ def signature(name: str, args: dict | None) -> str:
             # 参数名变了也不能失忆：退回「第一个字符串参数」。
             cmd = next((v for v in data.values() if isinstance(v, str) and v.strip()), "")
         body = _preview(cmd).replace("\\", "/")
-        return "cmd:%s" % body
+        # 2026-10-14 用户口径：判定键分两档，治「命令稍微变动一点就不算同一条」——
+        #   · 读类动词（type/cat/Get-Content/findstr…）：按**动词**记，换文件不再问
+        #   · 其它动词（del/rm/reg/Remove-Item…）：按**动词 + 目标目录**记，
+        #     同目录的变体不再问，换目标目录仍要点头（改数据不能放开成整个动词）
+        # hardline 一律不可记忆（can_remember 拦）。
+        verb = _verb_of(body)
+        if not verb or verb in _VERB_SCOPED:
+            return "cmd:%s *" % verb
+        root = _target_root(body)
+        return "cmd:%s @%s" % (verb, root) if root else "cmd:%s *" % verb
     try:
         blob = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
     except Exception:                                     # pragma: no cover - 兜底
