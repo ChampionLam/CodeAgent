@@ -21,9 +21,27 @@ export function kindOf(path: string): string {
   const ext = (fileNameOf(path).match(/\.([A-Za-z0-9]+)$/) || [, ''])[1].toLowerCase();
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
   if (['py', 'ts', 'tsx', 'js', 'jsx', 'json', 'sh', 'ps1', 'bat', 'cs', 'java', 'go', 'rs', 'sql', 'yml', 'yaml', 'toml', 'html', 'css'].includes(ext)) return 'code';
+  // 视频/音频单独成类：卡上要出播放器，而不是一个文件图标（2026-10-15）。
+  if (['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'm4a', 'ogg', 'opus', 'flac', 'aac'].includes(ext)) return 'audio';
   if (['md', 'txt', 'log', 'csv', 'tsv', 'ini', 'env'].includes(ext)) return 'text';
   if (['doc', 'docx', 'pdf', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext)) return 'doc';
   return 'file';
+}
+
+/**
+ * 附件该用什么渲染：图片画缩略图、视频/音频出内嵌播放器。
+ *
+ * 老行（2026-10-15 之前落库的）kind 是 'other'，光看 kind 会退化成文件图标，
+ * 所以扩展名兜一层 —— 库里已有的视频也能直接播。
+ */
+export function mediaKindOf(artifact: { kind?: string; path: string }): 'image' | 'video' | 'audio' | null {
+  const byExt = kindOf(artifact.path || '');
+  const kind = artifact.kind || '';
+  if (kind === 'video' || byExt === 'video') return 'video';
+  if (kind === 'audio' || byExt === 'audio') return 'audio';
+  if (kind === 'image' || byExt === 'image') return 'image';
+  return null;
 }
 
 /** 只在「非代码」片段里找标记：行内反引号与 ``` 围栏整段跳过。 */

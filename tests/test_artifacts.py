@@ -146,3 +146,12 @@ class GeneratedMediaTest(unittest.TestCase):
         rows = [{"id": "2", "name": "video_generate", "ok": True,
                  "content": "video_generate: 已生成 1 个文件\nD:/ws/gen/gen_9.mp4\nmodel: MiniMax-Hailuo"}]
         self.assertEqual(artifacts.generated_paths(rows), ["D:/ws/gen/gen_9.mp4"])
+
+    def test_video_and_audio_have_their_own_kind(self):
+        """视频/音频单独成类 —— 界面据此出内嵌播放器（2026-10-15）。"""
+        self.assertEqual(artifacts.kind_of("gen_1.mp4"), "video")
+        self.assertEqual(artifacts.kind_of("a.WEBM"), "video")
+        self.assertEqual(artifacts.kind_of("a.mov"), "video")
+        self.assertEqual(artifacts.kind_of("voice.mp3"), "audio")
+        self.assertEqual(artifacts.kind_of("a.wav"), "audio")
+        self.assertEqual(artifacts.kind_of("shot.png"), "image")

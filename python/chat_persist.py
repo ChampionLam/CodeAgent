@@ -266,6 +266,22 @@ def persist_chat_result(store, session_id: str | None, *,
         warn("WARN", "chat result persist failed: %r" % (e,))
 
 
+def _canonical_args(raw) -> str:
+    """参数规范化：吃掉键序/空白差异，用于「不依赖 id」的匹配。"""
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return raw.strip()
+    try:
+        return json.dumps(raw, sort_keys=True, ensure_ascii=False,
+                          separators=(",", ":"))
+    except Exception:
+        return str(raw)
+
+
 def _persist_tool_calls(store, session_id: str, tail: list, written: list,
                         tool_events: list, warn) -> None:
     """One tool_calls row per captured tool.call/tool.result pair.
@@ -281,14 +297,22 @@ def _persist_tool_calls(store, session_id: str, tail: list, written: list,
         return
     assistant_calls: dict[str, str] = {}   # tool_call_id -> message row id
     tool_messages: dict[str, str] = {}     # tool_call_id -> message row id
+    assistant_by_key: dict[tuple, list] = {}   # (工具名, 规范化参数) -> [message row id]
+    assistant_rows: list[str] = []             # 本轮带 tool_calls 的 assistant 行（有序）
     for msg, row in zip(tail, written):
         row_id = str(row.get("id") or "")
         calls = msg.get("tool_calls")
         if msg.get("role") == "assistant" and isinstance(calls, list):
+            assistant_rows.append(row_id)
             for tc in calls:
-                cid = (tc or {}).get("id")
+                tc = tc or {}
+                cid = tc.get("id")
                 if cid:
                     assistant_calls[str(cid)] = row_id
+                fn = tc.get("function") or {}
+                key = (str(fn.get("name") or tc.get("name") or ""),
+                       _canonical_args(fn.get("arguments", tc.get("arguments"))))
+                assistant_by_key.setdefault(key, []).append(row_id)
         elif msg.get("role") == "tool" and msg.get("tool_call_id"):
             tool_messages[str(msg["tool_call_id"])] = row_id
 
@@ -296,9 +320,24 @@ def _persist_tool_calls(store, session_id: str, tail: list, written: list,
         cid = str(event.get("id") or "")
         if not cid:
             continue
-        message_id = assistant_calls.get(cid) or tool_messages.get(cid)
+        # 2026-10-14 真机：事件 id 和消息里的 tool_call id 不是同一套口径
+        # （事件 uuid vs 模型的 call_xxx），按 id 硬对会全军覆没 ——
+        # 会话库里 tool_calls 表一直是空的。这里按可靠度依次退化：
+        #   callId / id → （工具名 + 规范化参数）唯一命中 → 单调用轮次直接认。
+        call_id = str(event.get("callId") or "")
+        message_id = (assistant_calls.get(call_id) or assistant_calls.get(cid)
+                      or tool_messages.get(call_id) or tool_messages.get(cid))
         if not message_id:
-            warn("WARN", "tool call %s: no message to link, skipping row" % cid)
+            same = assistant_by_key.get(
+                (str(event.get("name") or ""), _canonical_args(event.get("arguments")))) or []
+            uniq = list(dict.fromkeys(same))
+            if len(uniq) == 1:
+                message_id = uniq[0]
+        if not message_id and len(assistant_rows) == 1 and len(tool_events) == 1:
+            message_id = assistant_rows[0]
+        if not message_id:
+            warn("WARN", "tool call %s: no message to link, skipping row (id=%s name=%s)"
+                 % (cid, cid, event.get("name")))
             continue
         ok = bool(event.get("ok"))
         try:
@@ -330,12 +369,12 @@ def merge_tool_event(state: dict, event: str, data: dict) -> None:
         return
     row = state.setdefault(cid, {"id": cid})
     if event == "tool.call":
-        for key in ("name", "arguments", "level"):
+        for key in ("name", "arguments", "level", "callId"):
             if data.get(key) is not None:
                 row[key] = data[key]
     elif event == "tool.result":
         for key in ("name", "ok", "content", "errorCode", "errorMessage",
-                    "durationMs", "decision"):
+                    "durationMs", "decision", "callId"):
             if data.get(key) is not None:
                 row[key] = data[key]
 

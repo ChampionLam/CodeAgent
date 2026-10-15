@@ -21,6 +21,9 @@ MAX_ARTIFACTS = 8
 
 _MARKER = re.compile(r"\[\[\s*file\s*[:：]\s*([^\]]+?)\s*\]\]")
 
+_VIDEO_EXT = frozenset({".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi"})
+_AUDIO_EXT = frozenset({".mp3", ".wav", ".m4a", ".ogg", ".opus", ".flac", ".aac"})
+
 _WRITE_TOOLS = ("write_file", "patch", "apply_patch")
 
 #: 生成类工具（产物路径在 result 里，不在 arguments 里）
@@ -36,10 +39,18 @@ _DOC_EXT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", "
 
 
 def kind_of(path: str) -> str:
-    """image / doc / code / text / other —— 前端按这个挑图标（图片才画缩略图）。"""
+    """image / video / audio / doc / code / text / other —— 前端按这个挑渲染方式。
+
+    2026-10-15：视频/音频单独成类。之前生视频的产物落在 other 里，界面只给
+    一个文件图标 + 「打开」，用户没法在对话里直接播。
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext in _IMAGE_EXT:
         return "image"
+    if ext in _VIDEO_EXT:
+        return "video"
+    if ext in _AUDIO_EXT:
+        return "audio"
     if ext in _DOC_EXT:
         return "doc"
     if ext in _CODE_EXT:

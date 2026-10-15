@@ -433,3 +433,19 @@
   transition: background var(--motion-fast), color var(--motion-fast);
 }
 .afile__act:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* 附件卡里的内嵌播放器（2026-10-15）：视频/音频整行展开，跟着卡片一起换行。 */
+.afile__media {
+  flex-basis: 100%;
+  margin-top: 8px;
+  display: block;
+}
+.afile__media video {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  background: #000;
+}
+.afile__media audio {
+  width: 100%;
+}

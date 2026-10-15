@@ -13,7 +13,7 @@
  *     pinned, whether the demo seed ran. That lives in localStorage, because
  *     those are per-window preferences, not facts about the user's history.
  */
-import type { Message, Role, Session } from '../types';
+import type { Message, Role, Session, ToolCall, ToolStatus } from '../types';
 import type { ConversationRepo, PersistedConversation } from './persistence';
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,15 @@ interface SessionsBridge {
       projectSkills?: string[];
     }): Promise<unknown>;
     remove(sessionId: string): Promise<unknown>;
-    messages(sessionId: string, includeInactive?: boolean): Promise<{ messages: MessageRow[] }>;
+    /**
+     * 历史消息 + 本会话的工具调用行（后端 2026-09-25 起一起回传：状态/结果/耗时
+     * 都在 tool_calls 表里）。界面必须读它，否则对话里看不到工具执行过程 ——
+     * 模型调了什么、成没成、报什么错，用户只能去翻日志。
+     */
+    messages(sessionId: string, includeInactive?: boolean): Promise<{
+      messages: MessageRow[];
+      toolCalls?: unknown[];
+    }>;
     search(query: string, sessionId?: string): Promise<{ hits: Array<MessageRow & { sessionId?: string }> }>;
   };
 }
@@ -92,6 +100,84 @@ export function sidecarSessions(): SessionsBridge['sessions'] | null {
 // ---------------------------------------------------------------------------
 // Mapping
 // ---------------------------------------------------------------------------
+
+/** 工具调用行（后端 tool_calls 表）→ 界面 ToolCall，按 message_id 分组。 */
+function parseJsonObject(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/** 卡片摘要行：挑一个最像「这条命令在干什么」的字符串参数。 */
+function argHint(args: Record<string, unknown>): string {
+  for (const key of ['command', 'path', 'prompt', 'query', 'url', 'pattern', 'name']) {
+    const v = args[key];
+    if (typeof v === 'string' && v.trim()) {
+      const t = v.trim().replace(/\s+/g, ' ');
+      return t.length > 60 ? t.slice(0, 57) + '…' : t;
+    }
+  }
+  return '';
+}
+
+function toUiToolCall(r: Record<string, unknown>): ToolCall {
+  const args = parseJsonObject(r.arguments_json ?? r.argumentsJson ?? r.arguments);
+  const errRaw = r.error_json ?? r.errorJson ?? r.error;
+  const err = errRaw ? parseJsonObject(errRaw) : null;
+  const resRaw = r.result_json ?? r.resultJson ?? r.result;
+  let result = '';
+  if (typeof resRaw === 'string') result = resRaw;
+  else if (resRaw && typeof resRaw === 'object') {
+    const c = (resRaw as Record<string, unknown>).content;
+    result = typeof c === 'string' ? c : JSON.stringify(resRaw);
+  }
+  // 失败时把原因写进 result：用户要能直接看到「为什么没成」，
+  // 而不是回去翻日志（2026-10-14 生视频 1004 那类错误界面零提示）。
+  if (err) {
+    const msg = err.message ?? err.code ?? JSON.stringify(err);
+    result = String(msg);
+  }
+  const decision = String(r.decision ?? '');
+  const status: ToolStatus = err
+    ? 'failed'
+    : /deny|reject/i.test(decision)
+      ? 'rejected'
+      : result ? 'success' : 'running';
+  const startedAt = toMs((r.started_at ?? r.startedAt) as number | string | undefined, Date.now());
+  const finished = r.finished_at ?? r.finishedAt;
+  return {
+    id: String(r.id ?? ''),
+    name: String(r.tool_name ?? r.toolName ?? ''),
+    summary: argHint(args),
+    level: 'L0',
+    status,
+    args,
+    ...(result ? { result } : {}),
+    startedAt,
+    endedAt: finished ? toMs(finished as number | string, startedAt) : undefined
+  };
+}
+
+function groupToolRuns(raw: unknown): Map<string, ToolCall[]> {
+  const out = new Map<string, ToolCall[]>();
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    const r = (item ?? {}) as Record<string, unknown>;
+    const mid = String(r.message_id ?? r.messageId ?? '');
+    if (!mid) continue;
+    const list = out.get(mid) ?? [];
+    list.push(toUiToolCall(r));
+    out.set(mid, list);
+  }
+  return out;
+}
 
 const LS_ACTIVE = 'workbuddy.activeSession';
 const LS_PINNED = 'workbuddy.pinnedSessions';
@@ -249,6 +335,7 @@ export class SidecarConversationRepo implements ConversationRepo {
   async loadMessages(id: string): Promise<Message[]> {
     const res = await this.bridge.messages(id, false);
     const rows = Array.isArray(res?.messages) ? res.messages : [];
+    const runsByMsg = groupToolRuns(res?.toolCalls);
     const out: Message[] = [];
     const now = Date.now();
     rows.forEach((row, i) => {
@@ -266,9 +353,11 @@ export class SidecarConversationRepo implements ConversationRepo {
       const artifacts = Array.isArray(row?.artifacts) ? row.artifacts : [];
       // Tool rows and tool-call-only assistant rows exist server-side (the
       // backend records them) but have no bubble of their own in this UI.
-      // 例外：只带附件的行要留下 —— 否则「生成完文件但正文为空」这种轮次
-      // 在界面上会连产物一起消失（2026-10-14 真机生视频就是这条形态）。
-      if (!content && !thinking && !images.length && !artifacts.length) return;
+      // 例外：只带附件、或只带工具调用的行要留下 —— 否则「模型只调了工具、
+      // 正文为空」这种轮次在界面上会连过程一起消失（2026-10-14 真机：工具卡
+      // 永远不出现，生图的调用过程也看不到）。
+      const runs = runsByMsg.get(String(row?.id ?? '')) ?? [];
+      if (!content && !thinking && !images.length && !artifacts.length && !runs.length) return;
       out.push({
         id: String(row?.id ?? `${id}-${i}`),
         role: role as Role,
@@ -276,6 +365,7 @@ export class SidecarConversationRepo implements ConversationRepo {
         ...(thinking ? { thinking } : {}),
         ...(images.length ? { images } : {}),
         ...(artifacts.length ? { artifacts: artifacts as Message['artifacts'] } : {}),
+        ...(runs.length ? { toolCalls: runs } : {}),
         createdAt: toMs(row?.createdAt ?? row?.created_at, now)
       });
     });

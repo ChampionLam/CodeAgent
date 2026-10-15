@@ -11,7 +11,8 @@ import type { MessageArtifact } from '../../types';
 import { useApp } from '../../state/store';
 import { fmtTokens } from '../../state/usage';
 import { MarkdownView } from './MarkdownView';
-import { extractLocalFiles, fileNameOf, kindOf } from '../../lib/localFileLinks';
+import { extractLocalFiles, fileNameOf, kindOf, mediaKindOf } from '../../lib/localFileLinks';
+import { ToolCallCard } from '../tools/ToolCallCard';
 import { ApprovalCard } from './ApprovalCard';
 import './MessageBubble.css';
 
@@ -39,6 +40,17 @@ function ArtifactCard(props: { artifact: MessageArtifact }) {
         <span className="afile__name">{artifact.name}</span>
         <span className="afile__meta">{humanSize(artifact.size)}</span>
       </span>
+      {/* 视频/音频在对话里直接能播，不用先「打开」跳外部播放器（2026-10-15）。 */}
+      {mediaKindOf(artifact) === 'video' && (
+        <span className="afile__media">
+          <video src={fileUrl(artifact.path)} controls preload="metadata" />
+        </span>
+      )}
+      {mediaKindOf(artifact) === 'audio' && (
+        <span className="afile__media">
+          <audio src={fileUrl(artifact.path)} controls preload="metadata" />
+        </span>
+      )}
       <span className="afile__actions">
         <button className="afile__act" onClick={() => void openArtifact(artifact.path)}>打开</button>
         <button className="afile__act" onClick={() => void revealArtifact(artifact.path)}>文件夹</button>
@@ -176,6 +188,11 @@ function MessageBubbleInner({ message }: { message: Message }) {
           {hasText && <MarkdownView content={bodyText} streaming={message.streaming} />}
 
           {/* 本轮产出的文件。用户要求：文件要直接出现在对话里，而不是只有一行路径。 */}
+          {message.toolCalls && message.toolCalls.length > 0 && (
+            <div className="msg__tools">
+              {message.toolCalls.map(tc => <ToolCallCard key={tc.id} call={tc} />)}
+            </div>
+          )}
           {artifacts.length > 0 && (
             <div className="msg__artifacts">
               {artifacts.map(a => <ArtifactCard key={a.path} artifact={a} />)}

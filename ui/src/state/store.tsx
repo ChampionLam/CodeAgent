@@ -6,6 +6,7 @@ import {
   createContext, useContext, useState, useCallback, useEffect, useRef,
   type ReactNode
 } from 'react';
+import { applyArtifacts } from '../lib/artifactPatch';
 import type {
   Session, Message, ModelConfig, PermissionRule,
   ApprovalRequest, ToolCall, ToolStatus,
@@ -1141,8 +1142,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
           patchStreaming(sid, m => ({ ...m, thinking: (m.thinking || '') + String(data.text ?? '') }));
           break;
         case 'chat.artifacts':
-          // 本轮产出的文件（后端在落库后单独推一次）
-          patchStreaming(sid, m => ({ ...m, artifacts: (data.artifacts as Message['artifacts']) ?? [] }));
+          // 本轮产出的文件（后端在落库后单独推一次）。注意这里不能只贴流式那条：
+          // 事件到达时 chat.done 已经先到、流式标记已清，贴上去会落空 ——
+          // 结果是更早轮次的文件卡要刷新才出现（2026-10-15 真机实测）。
+          setMessages(prev => ({
+            ...prev,
+            [sid]: applyArtifacts(prev[sid] || [],
+                                  (data.artifacts as Message['artifacts']) ?? [],
+                                  typeof data.messageId === 'string' ? data.messageId : undefined)
+          }));
           break;
         case 'chat.done': {
           const u = (data.usage ?? {}) as Record<string, number>;
